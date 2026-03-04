@@ -1,0 +1,17 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: fakenews-detector-server
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      GEMINI_URL: "https://gemini.google.com/app"
+      GEMINI_HEADLESS: "true"
+      GEMINI_TIMEOUT_MS: "120000"
+      GEMINI_LOGIN_WAIT_MS: "300000"
+    volumes:
+      - ./server/.gemini-profile:/app/.gemini-profile
+    restart: unless-stopped

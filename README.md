@@ -104,3 +104,35 @@ GitHub 저장소 설정에서 아래 변수를 추가하세요.
 
 - `VITE_BASE_PATH`: 빌드 base 경로
 - `VITE_API_BASE_URL`: 백엔드 주소 (로컬 개발은 비워두면 프록시 사용)
+
+## 서버 Docker 배포
+
+### 1) Docker Compose로 실행
+
+```bash
+docker compose up -d --build
+```
+
+헬스체크:
+
+```bash
+curl http://localhost:8787/api/health
+```
+
+### 2) Dockerfile로 직접 실행
+
+```bash
+docker build -f server/Dockerfile -t fakenews-detector-server .
+docker run -d \
+  --name fakenews-detector-server \
+  -p 8787:8787 \
+  -e GEMINI_HEADLESS=true \
+  -v $(pwd)/server/.gemini-profile:/app/.gemini-profile \
+  fakenews-detector-server
+```
+
+### 3) 중요 주의사항
+
+- 컨테이너는 기본 `GEMINI_HEADLESS=true`로 실행됩니다.
+- Gemini 사용에는 로그인 세션이 필요하며, 세션은 볼륨(`/app/.gemini-profile`)에 저장됩니다.
+- 서버만 Docker로 배포해도 API(`/api/*`)는 동작합니다. (`client/dist`가 없으면 API 모드로 404 안내 응답)

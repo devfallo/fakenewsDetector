@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -252,10 +253,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const builtClientPath = path.resolve(__dirname, '../client/dist');
 
-app.use(express.static(builtClientPath));
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(builtClientPath, 'index.html'));
-});
+if (existsSync(builtClientPath)) {
+  app.use(express.static(builtClientPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(builtClientPath, 'index.html'));
+  });
+} else {
+  app.get('*', (_req, res) => {
+    res.status(404).json({
+      ok: false,
+      error: 'Client build 파일이 없습니다. API 엔드포인트(/api/*)를 사용하세요.'
+    });
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
