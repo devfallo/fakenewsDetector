@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const EXAMPLES = [
   'https://www.youtube.com/shorts/xxxxxxxx',
@@ -6,12 +8,43 @@ const EXAMPLES = [
   'https://example.com/community-post/123'
 ];
 
+function parseAnalysis(text) {
+  const verdictMatch = text.match(/판정\s*[:：]\s*\[?([^\]\n]+)\]?/i);
+  const confidenceMatch = text.match(/신뢰도\s*[:：]\s*\[?(\d{1,3})/i);
+
+  const verdict = verdictMatch ? verdictMatch[1].trim() : '판별불가';
+  const confidence = confidenceMatch ? Math.max(0, Math.min(100, Number(confidenceMatch[1]))) : null;
+
+  const hasReal = /진짜뉴스|사실|true/i.test(verdict);
+  const hasFake = /가짜뉴스|허위|false/i.test(verdict);
+
+  if (hasFake && (confidence === null || confidence >= 70)) {
+    return { verdict, confidence, level: 'fake' };
+  }
+  if (hasReal && (confidence === null || confidence >= 70)) {
+    return { verdict, confidence, level: 'real' };
+  }
+  return { verdict, confidence, level: 'unclear' };
+}
+
+function statusMeta(level) {
+  if (level === 'real') {
+    return { label: '진짜뉴스 가능성 높음', icon: 'OK', tone: 'green' };
+  }
+  if (level === 'fake') {
+    return { label: '가짜뉴스 가능성 높음', icon: 'X', tone: 'red' };
+  }
+  return { label: '애매함 / 추가 확인 필요', icon: '!', tone: 'yellow' };
+}
+
 function App() {
   const [link, setLink] = useState('');
   const [context, setContext] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
+  const parsed = result ? parseAnalysis(result) : null;
+  const meta = parsed ? statusMeta(parsed.level) : null;
 
   const onSubmit = async (event) => {
     event.preventDefault();
@@ -90,7 +123,21 @@ function App() {
         {result && (
           <article className="result">
             <h2>판별 결과</h2>
-            <pre>{result}</pre>
+            {parsed && meta && (
+              <section className={`status-board ${meta.tone}`}>
+                <div className="status-icon">{meta.icon}</div>
+                <div className="status-content">
+                  <strong>{meta.label}</strong>
+                  <div className="status-metrics">
+                    <span>판정: {parsed.verdict}</span>
+                    <span>신뢰도: {parsed.confidence === null ? '미제공' : `${parsed.confidence}%`}</span>
+                  </div>
+                </div>
+              </section>
+            )}
+            <div className="markdown-result">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{result}</ReactMarkdown>
+            </div>
           </article>
         )}
       </section>

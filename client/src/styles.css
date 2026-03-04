@@ -112,12 +112,68 @@ button:disabled {
   padding-top: 12px;
 }
 
-.result pre {
-  white-space: pre-wrap;
-  word-break: break-word;
+.status-board {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid;
+  margin-bottom: 12px;
+}
+
+.status-board.green {
+  background: #ecfff2;
+  border-color: #58b879;
+}
+
+.status-board.yellow {
+  background: #fff8e6;
+  border-color: #d8b14c;
+}
+
+.status-board.red {
+  background: #ffeded;
+  border-color: #d86666;
+}
+
+.status-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.status-content {
+  display: grid;
+  gap: 4px;
+}
+
+.status-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.93rem;
+  color: #3b4d44;
+}
+
+.markdown-result {
   background: #f4fff7;
   border: 1px solid #ccefd5;
   border-radius: 10px;
   padding: 12px;
   line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.markdown-result > :first-child {
+  margin-top: 0;
+}
+
+.markdown-result > :last-child {
+  margin-bottom: 0;
 }
