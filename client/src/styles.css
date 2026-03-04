@@ -40,9 +40,45 @@ h1 {
   color: #42574d;
 }
 
+.install-box {
+  margin: 0 0 16px;
+}
+
+.install-button {
+  border: 1px solid #0d8a50;
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: #ecfff2;
+  color: #0d8a50;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.install-message {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  color: #3f5d50;
+}
+
 form {
   display: grid;
   gap: 10px;
+}
+
+.link-label {
+  font-size: 1.05rem;
+}
+
+.link-input {
+  min-height: 62px;
+  font-size: 1.07rem;
+  border: 2px solid #67b483;
+  background: #f1fff6;
+  box-shadow: 0 0 0 4px rgba(103, 180, 131, 0.13);
+}
+
+.link-input::placeholder {
+  color: #5d7f70;
 }
 
 label {

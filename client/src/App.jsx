@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -46,6 +46,8 @@ function statusMeta(level) {
 }
 
 function App() {
+  const [installPromptEvent, setInstallPromptEvent] = useState(null);
+  const [installMessage, setInstallMessage] = useState('');
   const [link, setLink] = useState('');
   const [context, setContext] = useState('');
   const [loading, setLoading] = useState(false);
@@ -53,6 +55,48 @@ function App() {
   const [result, setResult] = useState('');
   const parsed = result ? parseAnalysis(result) : null;
   const meta = parsed ? statusMeta(parsed.level) : null;
+  const hasLink = link.trim().length > 0;
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event);
+    };
+
+    const onAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setInstallMessage('앱이 홈 화면에 추가되었습니다.');
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, []);
+
+  const onAddToHomeScreen = async () => {
+    if (installPromptEvent) {
+      installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice.catch(() => null);
+      if (choice?.outcome === 'accepted') {
+        setInstallMessage('설치가 진행 중입니다.');
+      } else {
+        setInstallMessage('설치를 취소했습니다.');
+      }
+      setInstallPromptEvent(null);
+      return;
+    }
+
+    const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+    if (isIos) {
+      setInstallMessage('Safari 공유 버튼에서 "홈 화면에 추가"를 선택하세요.');
+      return;
+    }
+
+    setInstallMessage('이 브라우저에서는 자동 설치 버튼을 지원하지 않습니다.');
+  };
 
   const onSubmit = async (event) => {
     event.preventDefault();
@@ -94,25 +138,37 @@ function App() {
         <h1>가짜뉴스 판별기</h1>
         <p className="sub">커뮤니티/숏츠/릴스 링크를 붙여넣으면 Gemini 웹에서 판별 결과를 받아옵니다.</p>
 
+        <div className="install-box">
+          <button type="button" className="install-button" onClick={onAddToHomeScreen}>
+            홈 화면에 추가
+          </button>
+          {installMessage && <p className="install-message">{installMessage}</p>}
+        </div>
+
         <form onSubmit={onSubmit}>
-          <label htmlFor="link">콘텐츠 링크</label>
+          <label htmlFor="link" className="link-label">콘텐츠 링크</label>
           <input
             id="link"
             type="url"
+            className="link-input"
             value={link}
             onChange={(e) => setLink(e.target.value)}
             placeholder="https://..."
             required
           />
 
-          <label htmlFor="context">추가 설명 (선택)</label>
-          <textarea
-            id="context"
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
-            placeholder="의심되는 부분, 주장 내용 등을 적어주세요"
-            rows={4}
-          />
+          {hasLink && (
+            <>
+              <label htmlFor="context">추가 설명 (선택)</label>
+              <textarea
+                id="context"
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                placeholder="의심되는 부분, 주장 내용 등을 적어주세요"
+                rows={4}
+              />
+            </>
+          )}
 
           <button type="submit" disabled={loading}>
             {loading ? 'Gemini 웹에서 판별 중...' : '가짜뉴스 판별하기'}
