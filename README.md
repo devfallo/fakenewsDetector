@@ -65,3 +65,42 @@ npm run dev
   "result": "Gemini 답변 원문"
 }
 ```
+
+## 배포 (GitHub Actions / GitHub Pages)
+
+이 프로젝트는 프론트(`client`)와 브라우저 자동화 백엔드(`server`)가 분리되어 있습니다.
+
+- GitHub Pages: **프론트엔드 정적 파일만 배포 가능**
+- 백엔드(Playwright + Gemini 웹 자동화): 별도 서버(Render, Railway, VPS 등)에 배포 필요
+
+### 1) CI (GitHub Actions)
+
+`/.github/workflows/ci.yml`
+
+- 루트/클라이언트/서버 의존성 설치
+- 서버 문법 체크
+- 클라이언트 빌드
+
+### 2) GitHub Pages 자동배포
+
+`/.github/workflows/deploy-pages.yml`
+
+- `main` 푸시 시 client 빌드 후 Pages 배포
+- 기본 base 경로: `/<repo-name>/`
+
+### 3) Pages에서 API 연결
+
+GitHub 저장소 설정에서 아래 변수를 추가하세요.
+
+- `Settings -> Secrets and variables -> Actions -> Variables`
+- 이름: `VITE_API_BASE_URL`
+- 값 예시: `https://your-backend.example.com`
+
+이 값을 설정하면 Pages 프론트가 해당 백엔드의 `/api/check`를 호출합니다.
+
+### 4) 로컬 프론트 env 예시
+
+`client/.env.example` 참고:
+
+- `VITE_BASE_PATH`: 빌드 base 경로
+- `VITE_API_BASE_URL`: 백엔드 주소 (로컬 개발은 비워두면 프록시 사용)

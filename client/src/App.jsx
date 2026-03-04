@@ -7,6 +7,14 @@ const EXAMPLES = [
   'https://www.instagram.com/reel/xxxxxxxx',
   'https://example.com/community-post/123'
 ];
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim();
+
+function apiUrl(path) {
+  if (!API_BASE_URL) {
+    return path;
+  }
+  return `${API_BASE_URL.replace(/\/+$/, '')}${path}`;
+}
 
 function parseAnalysis(text) {
   const verdictMatch = text.match(/판정\s*[:：]\s*\[?([^\]\n]+)\]?/i);
@@ -58,7 +66,7 @@ function App() {
     setResult('');
 
     try {
-      const response = await fetch('/api/check', {
+      const response = await fetch(apiUrl('/api/check'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
