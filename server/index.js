@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 const app = express();
 const PORT = process.env.PORT || 8787;
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 120000);
+const GEMINI_LOGIN_WAIT_MS = Number(process.env.GEMINI_LOGIN_WAIT_MS || 300000);
 const GEMINI_URL = process.env.GEMINI_URL || 'https://gemini.google.com/app';
 const GEMINI_HEADLESS = String(process.env.GEMINI_HEADLESS || 'false') === 'true';
 
@@ -21,7 +22,8 @@ async function getContext() {
     const profileDir = path.resolve(process.cwd(), '.gemini-profile');
     browserContextPromise = chromium.launchPersistentContext(profileDir, {
       headless: GEMINI_HEADLESS,
-      viewport: { width: 1366, height: 900 }
+      viewport: { width: 1366, height: 900 },
+      args: ['--start-maximized']
     });
   }
   return browserContextPromise;
@@ -45,7 +47,18 @@ function buildPrompt(link, extraContext = '') {
 }
 
 async function ensureGeminiReady(page) {
+  await page.bringToFront().catch(() => {});
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
+    origin: 'https://gemini.google.com'
+  });
   await page.goto(GEMINI_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.bringToFront().catch(() => {});
+
+  // 이미 로그인된 경우 즉시 진행
+  const readyInput = await findGeminiInput(page);
+  if (readyInput) {
+    return;
+  }
 
   const loginIndicators = [
     'text=로그인',
@@ -54,41 +67,76 @@ async function ensureGeminiReady(page) {
     'input[type="password"]'
   ];
 
+  let loginDetected = false;
   for (const selector of loginIndicators) {
     if (await page.locator(selector).first().isVisible().catch(() => false)) {
-      throw new Error('Gemini 로그인이 필요합니다. 열린 브라우저에서 Google 로그인 후 다시 시도하세요.');
-    }
-  }
-}
-
-async function fillPromptAndSend(page, prompt) {
-  const inputCandidates = [
-    'textarea[aria-label*="Enter a prompt"]',
-    'textarea[placeholder*="Enter a prompt"]',
-    'textarea',
-    '[contenteditable="true"]'
-  ];
-
-  let input = null;
-  for (const selector of inputCandidates) {
-    const candidate = page.locator(selector).first();
-    if (await candidate.isVisible().catch(() => false)) {
-      input = candidate;
+      loginDetected = true;
       break;
     }
   }
 
+  if (!loginDetected) {
+    return;
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < GEMINI_LOGIN_WAIT_MS) {
+    const input = await findGeminiInput(page);
+    if (input) {
+      return;
+    }
+    await page.waitForTimeout(1500);
+  }
+
+  throw new Error(
+    `Gemini 로그인 대기 시간이 초과되었습니다. ${Math.floor(
+      GEMINI_LOGIN_WAIT_MS / 1000
+    )}초 안에 열린 브라우저에서 Google 로그인을 완료해주세요.`
+  );
+}
+
+async function findGeminiInput(page) {
+  const inputCandidates = [
+    'textarea[aria-label*="Enter a prompt"]',
+    'textarea[aria-label*="프롬프트"]',
+    'textarea[placeholder*="Enter a prompt"]',
+    'textarea[placeholder*="프롬프트"]',
+    'textarea',
+    '[contenteditable="true"]'
+  ];
+
+  for (const selector of inputCandidates) {
+    const candidate = page.locator(selector).first();
+    if (await candidate.isVisible().catch(() => false)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function fillPromptAndSend(page, prompt) {
+  const input = await findGeminiInput(page);
   if (!input) {
     throw new Error('Gemini 입력창을 찾지 못했습니다. 페이지가 완전히 로드되었는지 확인하세요.');
   }
+
+  await page.evaluate(async (text) => {
+    await navigator.clipboard.writeText(text);
+  }, prompt);
 
   await input.click({ timeout: 10000 });
   await page.keyboard.press('Control+A').catch(() => {});
   await page.keyboard.press('Meta+A').catch(() => {});
   await page.keyboard.press('Backspace').catch(() => {});
-  await input.fill(prompt).catch(async () => {
-    await page.keyboard.type(prompt, { delay: 2 });
-  });
+  await page.keyboard.press('Meta+V').catch(() => {});
+  await page.keyboard.press('Control+V').catch(() => {});
+
+  const inputText = (await input.textContent().catch(() => '')) || '';
+  if (!inputText.trim()) {
+    await input.fill(prompt).catch(async () => {
+      await page.keyboard.type(prompt, { delay: 2 });
+    });
+  }
 
   await page.keyboard.press('Enter');
 }
@@ -98,6 +146,28 @@ async function waitForResponse(page, timeoutMs) {
   let best = '';
 
   while (Date.now() - start < timeoutMs) {
+    const actionButtonsVisible = await page
+      .locator('div.buttons-container-v2 copy-button button[data-test-id="copy-button"]')
+      .last()
+      .isVisible()
+      .catch(() => false);
+
+    if (actionButtonsVisible) {
+      const latestCopyButton = page.locator(
+        'div.buttons-container-v2 copy-button button[data-test-id="copy-button"]'
+      );
+      try {
+        await latestCopyButton.last().click({ timeout: 2500 });
+        await page.waitForTimeout(250);
+        const copiedText = await page.evaluate(async () => navigator.clipboard.readText());
+        if (copiedText?.trim()) {
+          return copiedText.trim();
+        }
+      } catch (_err) {
+        // Fallback to DOM text extraction below.
+      }
+    }
+
     const texts = await page
       .locator('model-response, .model-response-text, .response-content, markdown, .markdown')
       .allTextContents()
@@ -111,11 +181,7 @@ async function waitForResponse(page, timeoutMs) {
       }
     }
 
-    const stopVisible = await page
-      .locator('button:has-text("Stop"), button:has-text("중지")')
-      .first()
-      .isVisible()
-      .catch(() => false);
+    const stopVisible = await page.locator('button:has-text("Stop"), button:has-text("중지")').first().isVisible().catch(() => false);
 
     if (!stopVisible && best.length > 30) {
       await page.waitForTimeout(1200);
@@ -136,6 +202,7 @@ async function askGeminiByWeb(prompt) {
   const context = await getContext();
   const page = await context.newPage();
   try {
+    await page.bringToFront().catch(() => {});
     await ensureGeminiReady(page);
     await fillPromptAndSend(page, prompt);
     const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS);
@@ -147,6 +214,20 @@ async function askGeminiByWeb(prompt) {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, at: new Date().toISOString() });
+});
+
+app.get('/api/open-gemini', async (_req, res) => {
+  try {
+    const context = await getContext();
+    const page = await context.newPage();
+    await ensureGeminiReady(page);
+    return res.json({ ok: true, message: 'Gemini 페이지를 열었습니다.' });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Gemini 페이지 열기에 실패했습니다.'
+    });
+  }
 });
 
 app.post('/api/check', async (req, res) => {
