@@ -269,10 +269,12 @@ async function askGeminiByWeb(prompt) {
   const context = await getContext();
   const page = await context.newPage();
   try {
+    console.log('[Gemini] prompt to send:\n', prompt);
     await page.bringToFront().catch(() => {});
     await ensureGeminiReady(page);
     await fillPromptAndSend(page, prompt);
     const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS);
+    console.log(`[Gemini] response length: ${answer.length}`);
     return answer;
   } finally {
     await page.close().catch(() => {});
@@ -304,7 +306,16 @@ app.post('/api/check', async (req, res) => {
   }
 
   try {
-    const prompt = buildPrompt(link.trim(), typeof context === 'string' ? context.trim() : '');
+    const cleanLink = link.trim();
+    const cleanContext = typeof context === 'string' ? context.trim() : '';
+    console.log(`[API] /api/check requested link: ${cleanLink}`);
+    if (cleanContext) {
+      console.log(`[API] /api/check context: ${cleanContext}`);
+    } else {
+      console.log('[API] /api/check context: (empty)');
+    }
+
+    const prompt = buildPrompt(cleanLink, cleanContext);
     const result = await askGeminiByWeb(prompt);
     return res.json({ ok: true, link, result });
   } catch (error) {
