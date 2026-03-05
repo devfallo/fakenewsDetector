@@ -8,7 +8,8 @@ import { fileURLToPath } from 'url';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
-const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 120000);
+// Cloudflare 프록시 환경에서 장시간 요청이 끊기는 문제를 줄이기 위해 90초 기본값 사용.
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 90000);
 const GEMINI_LOGIN_WAIT_MS = Number(process.env.GEMINI_LOGIN_WAIT_MS || 300000);
 const GEMINI_URL = process.env.GEMINI_URL || 'https://gemini.google.com/app';
 const GEMINI_HEADLESS = String(process.env.GEMINI_HEADLESS || 'false') === 'true';
@@ -34,6 +35,9 @@ function buildPrompt(link, extraContext = '') {
   return [
     '너는 팩트체크 분석가야. 반드시 아래 2단계로 분석해.',
     '반드시 한국어로 답해줘.',
+    '링크에서 직접 확인한 정보만 사용하고, 추측/상상/일반 지식 보완을 금지해.',
+    '링크 접근 실패, 자막 확보 실패, 본문 확인 실패 중 하나라도 있으면 판정은 반드시 "판별불가"로 해.',
+    '브랜드명/키워드(예: 시크릿팡)만으로 사실 판단하지 마.',
     '',
     '[1단계: 링크 내용 파악]',
     '- 링크의 핵심 내용을 먼저 요약해.',
@@ -49,8 +53,9 @@ function buildPrompt(link, extraContext = '') {
     '2) 자막/대본 핵심: [핵심 문장 bullet 3~8개, 없으면 "확보 실패"]',
     '3) 판정: [가짜뉴스/진짜뉴스/판별불가]',
     '4) 신뢰도: [0~100 정수]',
-    '5) 근거: 핵심 근거 3가지',
+    '5) 근거: 핵심 근거 3가지 (각 근거에 "링크에서 확인한 문장/정보"를 1개 이상 포함)',
     '6) 주의: 불확실하거나 확인이 필요한 부분',
+    '7) 접근상태: [성공/실패] + 실패사유',
     '',
     `링크: ${link}`,
     extraContext ? `사용자 추가설명: ${extraContext}` : ''

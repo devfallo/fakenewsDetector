@@ -10,7 +10,7 @@ services:
       PORT: "8080"
       GEMINI_URL: "https://gemini.google.com/app"
       GEMINI_HEADLESS: "true"
-      GEMINI_TIMEOUT_MS: "120000"
+      GEMINI_TIMEOUT_MS: "90000"
       GEMINI_LOGIN_WAIT_MS: "300000"
     volumes:
       - ./server/.gemini-profile:/app/.gemini-profile

@@ -126,7 +126,13 @@ function App() {
 
       setResult(data.result || '응답이 비어 있습니다.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.');
+      if (err instanceof Error && /failed to fetch/i.test(err.message)) {
+        setError(
+          '서버 연결에 실패했습니다. 네트워크 상태 또는 서버 응답 지연(타임아웃)을 확인해주세요.'
+        );
+      } else {
+        setError(err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.');
+      }
     } finally {
       setLoading(false);
     }
