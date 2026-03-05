@@ -145,8 +145,17 @@ async function fillPromptAndSend(page, prompt) {
 async function waitForResponse(page, timeoutMs) {
   const start = Date.now();
   let best = '';
+  let lastUpdatedAt = start;
+  const settleMs = 4500;
+  const pollIntervalMs = 1200;
 
   while (Date.now() - start < timeoutMs) {
+    const stopVisible = await page
+      .locator('button:has-text("Stop"), button:has-text("중지")')
+      .first()
+      .isVisible()
+      .catch(() => false);
+
     const actionButtonsVisible = await page
       .locator('div.buttons-container-v2 copy-button button[data-test-id="copy-button"]')
       .last()
@@ -162,7 +171,15 @@ async function waitForResponse(page, timeoutMs) {
         await page.waitForTimeout(250);
         const copiedText = await page.evaluate(async () => navigator.clipboard.readText());
         if (copiedText?.trim()) {
-          return copiedText.trim();
+          const copied = copiedText.trim();
+          if (copied.length > best.length) {
+            best = copied;
+            lastUpdatedAt = Date.now();
+          }
+          // Stop 버튼이 사라지고 텍스트가 일정 시간 안정화된 뒤 반환해 잘림을 줄인다.
+          if (!stopVisible && Date.now() - lastUpdatedAt >= settleMs) {
+            return best;
+          }
         }
       } catch (_err) {
         // Fallback to DOM text extraction below.
@@ -179,17 +196,15 @@ async function waitForResponse(page, timeoutMs) {
       const latest = cleaned[cleaned.length - 1];
       if (latest.length > best.length) {
         best = latest;
+        lastUpdatedAt = Date.now();
       }
     }
 
-    const stopVisible = await page.locator('button:has-text("Stop"), button:has-text("중지")').first().isVisible().catch(() => false);
-
-    if (!stopVisible && best.length > 30) {
-      await page.waitForTimeout(1200);
+    if (!stopVisible && best.length > 30 && Date.now() - lastUpdatedAt >= settleMs) {
       return best;
     }
 
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(pollIntervalMs);
   }
 
   if (best.length > 0) {
