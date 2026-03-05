@@ -142,6 +142,89 @@ async function fillPromptAndSend(page, prompt) {
   await page.keyboard.press('Enter');
 }
 
+async function getLatestResponseByDom(page) {
+  const text = await page
+    .evaluate(() => {
+      const selectors = [
+        'model-response',
+        '.model-response-text',
+        '.response-content',
+        'markdown',
+        '.markdown'
+      ];
+
+      const nodes = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+      if (nodes.length === 0) {
+        return '';
+      }
+
+      const latest = nodes[nodes.length - 1];
+      const innerText = (latest.innerText || '').trim();
+      const textContent = (latest.textContent || '').trim();
+      return innerText.length >= textContent.length ? innerText : textContent;
+    })
+    .catch(() => '');
+
+  return text.trim();
+}
+
+async function getLatestResponseByCopy(page) {
+  const actionButtonsVisible = await page
+    .locator('div.buttons-container-v2 copy-button button[data-test-id="copy-button"]')
+    .last()
+    .isVisible()
+    .catch(() => false);
+
+  if (!actionButtonsVisible) {
+    return '';
+  }
+
+  const latestCopyButton = page.locator(
+    'div.buttons-container-v2 copy-button button[data-test-id="copy-button"]'
+  );
+  try {
+    await latestCopyButton.last().click({ timeout: 2500 });
+    await page.waitForTimeout(250);
+    const copiedText = await page.evaluate(async () => navigator.clipboard.readText());
+    return (copiedText || '').trim();
+  } catch (_err) {
+    return '';
+  }
+}
+
+async function collectFullResponseWithScroll(page, initialText = '') {
+  let best = initialText.trim();
+
+  for (let i = 0; i < 8; i += 1) {
+    await page
+      .evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+        const candidates = document.querySelectorAll(
+          'model-response, .model-response-text, .response-content, markdown, .markdown'
+        );
+        const latest = candidates[candidates.length - 1];
+        if (latest && 'scrollHeight' in latest && 'scrollTop' in latest) {
+          latest.scrollTop = latest.scrollHeight;
+        }
+      })
+      .catch(() => {});
+
+    const copied = await getLatestResponseByCopy(page);
+    if (copied.length > best.length) {
+      best = copied;
+    }
+
+    const fromDom = await getLatestResponseByDom(page);
+    if (fromDom.length > best.length) {
+      best = fromDom;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return best;
+}
+
 async function waitForResponse(page, timeoutMs) {
   const start = Date.now();
   let best = '';
@@ -156,59 +239,27 @@ async function waitForResponse(page, timeoutMs) {
       .isVisible()
       .catch(() => false);
 
-    const actionButtonsVisible = await page
-      .locator('div.buttons-container-v2 copy-button button[data-test-id="copy-button"]')
-      .last()
-      .isVisible()
-      .catch(() => false);
-
-    if (actionButtonsVisible) {
-      const latestCopyButton = page.locator(
-        'div.buttons-container-v2 copy-button button[data-test-id="copy-button"]'
-      );
-      try {
-        await latestCopyButton.last().click({ timeout: 2500 });
-        await page.waitForTimeout(250);
-        const copiedText = await page.evaluate(async () => navigator.clipboard.readText());
-        if (copiedText?.trim()) {
-          const copied = copiedText.trim();
-          if (copied.length > best.length) {
-            best = copied;
-            lastUpdatedAt = Date.now();
-          }
-          // Stop 버튼이 사라지고 텍스트가 일정 시간 안정화된 뒤 반환해 잘림을 줄인다.
-          if (!stopVisible && Date.now() - lastUpdatedAt >= settleMs) {
-            return best;
-          }
-        }
-      } catch (_err) {
-        // Fallback to DOM text extraction below.
-      }
+    const copied = await getLatestResponseByCopy(page);
+    if (copied.length > best.length) {
+      best = copied;
+      lastUpdatedAt = Date.now();
     }
 
-    const texts = await page
-      .locator('model-response, .model-response-text, .response-content, markdown, .markdown')
-      .allTextContents()
-      .catch(() => []);
-
-    const cleaned = texts.map((t) => t.trim()).filter(Boolean);
-    if (cleaned.length > 0) {
-      const latest = cleaned[cleaned.length - 1];
-      if (latest.length > best.length) {
-        best = latest;
-        lastUpdatedAt = Date.now();
-      }
+    const latest = await getLatestResponseByDom(page);
+    if (latest.length > best.length) {
+      best = latest;
+      lastUpdatedAt = Date.now();
     }
 
     if (!stopVisible && best.length > 30 && Date.now() - lastUpdatedAt >= settleMs) {
-      return best;
+      return collectFullResponseWithScroll(page, best);
     }
 
     await page.waitForTimeout(pollIntervalMs);
   }
 
   if (best.length > 0) {
-    return best;
+    return collectFullResponseWithScroll(page, best);
   }
 
   throw new Error('Gemini 응답을 시간 내에 가져오지 못했습니다.');
