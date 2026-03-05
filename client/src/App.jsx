@@ -199,6 +199,7 @@ function App() {
                 </div>
               </section>
             )}
+            <h3 className="raw-title">답변 원문</h3>
             <div className="markdown-result">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{result}</ReactMarkdown>
             </div>

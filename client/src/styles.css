@@ -196,14 +196,27 @@ button:disabled {
   color: #3b4d44;
 }
 
+.raw-title {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
 .markdown-result {
   background: #f4fff7;
   border: 1px solid #ccefd5;
   border-radius: 10px;
   padding: 12px;
   line-height: 1.45;
+  max-height: 55vh;
+  overflow: auto;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.markdown-result pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 .markdown-result > :first-child {
