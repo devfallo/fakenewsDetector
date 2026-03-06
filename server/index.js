@@ -13,20 +13,41 @@ const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 90000);
 const GEMINI_LOGIN_WAIT_MS = Number(process.env.GEMINI_LOGIN_WAIT_MS || 300000);
 const GEMINI_URL = process.env.GEMINI_URL || 'https://gemini.google.com/app';
 const GEMINI_HEADLESS = String(process.env.GEMINI_HEADLESS || 'true') === 'true';
+const GEMINI_PROFILE_DIR = path.resolve(process.env.GEMINI_PROFILE_DIR || path.resolve(process.cwd(), '.gemini-profile'));
+const GEMINI_REQUIRE_LOGIN = String(process.env.GEMINI_REQUIRE_LOGIN || 'true') === 'true';
+const GEMINI_CDP_URL = (process.env.GEMINI_CDP_URL || '').trim();
 
 app.use(cors());
 app.use(express.json());
 
+class GeminiLoginRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GeminiLoginRequiredError';
+  }
+}
+
 let browserContextPromise;
+let browserPromise;
 
 async function getContext() {
   if (!browserContextPromise) {
-    const profileDir = path.resolve(process.cwd(), '.gemini-profile');
-    browserContextPromise = chromium.launchPersistentContext(profileDir, {
-      headless: GEMINI_HEADLESS,
-      viewport: { width: 1366, height: 900 },
-      args: ['--start-maximized']
-    });
+    if (GEMINI_CDP_URL) {
+      browserPromise = chromium.connectOverCDP(GEMINI_CDP_URL);
+      browserContextPromise = browserPromise.then((browser) => {
+        const existing = browser.contexts();
+        if (existing.length > 0) {
+          return existing[0];
+        }
+        return browser.newContext();
+      });
+    } else {
+      browserContextPromise = chromium.launchPersistentContext(GEMINI_PROFILE_DIR, {
+        headless: GEMINI_HEADLESS,
+        viewport: { width: 1366, height: 900 },
+        args: ['--start-maximized']
+      });
+    }
   }
   return browserContextPromise;
 }
@@ -66,51 +87,50 @@ function buildPrompt(link, extraContext = '') {
 
 async function ensureGeminiReady(page) {
   await page.bringToFront().catch(() => {});
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
-    origin: 'https://gemini.google.com'
-  });
+  if (!GEMINI_CDP_URL) {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
+      origin: 'https://gemini.google.com'
+    });
+  }
   await page.goto(GEMINI_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.bringToFront().catch(() => {});
 
-  // 이미 로그인된 경우 즉시 진행
-  const readyInput = await findGeminiInput(page);
-  if (readyInput) {
-    return;
-  }
-
-  const loginIndicators = [
-    'text=로그인',
-    'text=Sign in',
-    'input[type="email"]',
-    'input[type="password"]'
-  ];
-
-  let loginDetected = false;
-  for (const selector of loginIndicators) {
-    if (await page.locator(selector).first().isVisible().catch(() => false)) {
-      loginDetected = true;
-      break;
-    }
-  }
-
-  if (!loginDetected) {
-    return;
-  }
-
+  const loginIndicators = ['text=로그인', 'text=Sign in', 'input[type="email"]', 'input[type="password"]'];
   const start = Date.now();
   while (Date.now() - start < GEMINI_LOGIN_WAIT_MS) {
     const input = await findGeminiInput(page);
     if (input) {
       return;
     }
+
+    let loginDetected = false;
+    for (const selector of loginIndicators) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) {
+        loginDetected = true;
+        break;
+      }
+    }
+
+    const currentUrl = page.url();
+    const maybeAuthPage = /accounts\.google\.com|signin|servicelogin/i.test(currentUrl);
+    if (GEMINI_REQUIRE_LOGIN && (loginDetected || maybeAuthPage)) {
+      throw new GeminiLoginRequiredError(
+        'Gemini 로그인 세션이 필요합니다. 로그인 후 다시 시도하세요.'
+      );
+    }
+
     await page.waitForTimeout(1500);
   }
 
-  throw new Error(
-    `Gemini 로그인 대기 시간이 초과되었습니다. ${Math.floor(
-      GEMINI_LOGIN_WAIT_MS / 1000
-    )}초 안에 열린 브라우저에서 Google 로그인을 완료해주세요.`
-  );
+  if (GEMINI_REQUIRE_LOGIN) {
+    throw new GeminiLoginRequiredError(
+      `Gemini 입력창 확인에 실패했습니다. ${Math.floor(
+        GEMINI_LOGIN_WAIT_MS / 1000
+      )}초 내 로그인/접속 상태를 확인해주세요.`
+    );
+  }
+
+  throw new Error('Gemini 입력창을 시간 내에 찾지 못했습니다.');
 }
 
 async function findGeminiInput(page) {
@@ -316,6 +336,22 @@ app.get('/api/open-gemini', async (_req, res) => {
   }
 });
 
+app.get('/api/auth-status', async (_req, res) => {
+  try {
+    const context = await getContext();
+    const page = await context.newPage();
+    await page.goto(GEMINI_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const input = await findGeminiInput(page);
+    await page.close().catch(() => {});
+    return res.json({ ok: true, loggedIn: Boolean(input) });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Gemini 인증 상태 확인에 실패했습니다.'
+    });
+  }
+});
+
 app.post('/api/check', async (req, res) => {
   const { link, context } = req.body || {};
   if (!link || typeof link !== 'string') {
@@ -336,6 +372,13 @@ app.post('/api/check', async (req, res) => {
     const result = await askGeminiByWeb(prompt);
     return res.json({ ok: true, link, result });
   } catch (error) {
+    if (error instanceof GeminiLoginRequiredError) {
+      return res.status(401).json({
+        ok: false,
+        error: error.message
+      });
+    }
+
     return res.status(500).json({
       ok: false,
       error: error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.'

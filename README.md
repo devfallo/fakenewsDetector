@@ -42,8 +42,21 @@ npm run dev
 - `GEMINI_HEADLESS`: `true`면 헤드리스 실행
 - `GEMINI_TIMEOUT_MS`: 응답 대기 시간(ms)
 - `GEMINI_LOGIN_WAIT_MS`: 로그인 대기 시간(ms, 기본 `300000`)
+- `GEMINI_REQUIRE_LOGIN`: `true`면 비로그인 상태에서 즉시 오류 반환
+- `GEMINI_CDP_URL`: 일반 Chrome 원격 디버깅 주소 (예: `http://host.docker.internal:9222`)
 
 ## API
+
+### `GET /api/auth-status`
+
+Gemini 로그인 상태 확인:
+
+```json
+{
+  "ok": true,
+  "loggedIn": true
+}
+```
 
 ### `POST /api/check`
 
@@ -106,6 +119,27 @@ GitHub 저장소 설정에서 아래 변수를 추가하세요.
 - `VITE_API_BASE_URL`: 백엔드 주소 (로컬 개발은 비워두면 프록시 사용)
 
 ## 서버 Docker 배포
+
+### 일반 Chrome 세션 재사용 (권장)
+
+Google 계정 보안 정책으로 Playwright 브라우저 로그인 차단이 발생할 수 있습니다. 이 경우 일반 Chrome 로그인 세션을 CDP로 재사용하세요.
+
+1. 호스트에서 일반 Chrome을 원격 디버깅으로 실행
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222
+```
+
+2. Chrome에서 `https://gemini.google.com/app` 로그인 완료
+3. `docker-compose.yml`에 `GEMINI_CDP_URL: "http://host.docker.internal:9222"` 설정
+4. 서버 재시작
+
+```bash
+docker compose up -d --build server
+```
+
+비로그인 상태 차단(엉뚱한 응답 방지)은 `GEMINI_REQUIRE_LOGIN=true`로 기본 활성화되어 있습니다.
 
 ### 1) Docker Compose로 실행
 
