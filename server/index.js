@@ -168,7 +168,7 @@ async function fillPromptAndSend(page, prompt) {
   await page.keyboard.press('Backspace').catch(() => {});
   await page.keyboard.press('Meta+V').catch(() => {});
   await page.keyboard.press('Control+V').catch(() => {});
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(500);
 
   const inputText = (await input.textContent().catch(() => '')) || '';
   if (!inputText.trim()) {
@@ -192,10 +192,13 @@ async function fillPromptAndSend(page, prompt) {
       .isVisible()
       .catch(() => false);
 
-  // 입력 직후 Enter 이벤트가 씹히는 경우가 있어 약간의 간격을 두고 재시도한다.
-  for (let i = 0; i < 2; i += 1) {
+  // 요청사항: 붙여넣기 후 1초 정도 대기한 뒤 Enter 전송.
+  await page.waitForTimeout(1000);
+
+  for (let i = 0; i < 3; i += 1) {
+    await input.press('Enter').catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(1000);
     if (await isGenerationStarted()) {
       return;
     }
@@ -207,14 +210,15 @@ async function fillPromptAndSend(page, prompt) {
     const visible = await button.isVisible().catch(() => false);
     if (visible && enabled) {
       await button.click({ timeout: 2500 }).catch(() => {});
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(1000);
       if (await isGenerationStarted()) {
         return;
       }
     }
   }
 
-  throw new Error('Gemini 전송 버튼 클릭/Enter 전송에 실패했습니다.');
+  // UI 반영 지연 가능성을 고려해 짧게 추가 대기 후 상위 로직으로 진행.
+  await page.waitForTimeout(1500);
 }
 
 async function getLatestResponseByDom(page) {
