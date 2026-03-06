@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 8787;
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 90000);
 const GEMINI_LOGIN_WAIT_MS = Number(process.env.GEMINI_LOGIN_WAIT_MS || 300000);
 const GEMINI_URL = process.env.GEMINI_URL || 'https://gemini.google.com/app';
-const GEMINI_HEADLESS = String(process.env.GEMINI_HEADLESS || 'false') === 'true';
+const GEMINI_HEADLESS = String(process.env.GEMINI_HEADLESS || 'true') === 'true';
 
 app.use(cors());
 app.use(express.json());
@@ -37,7 +37,7 @@ function buildPrompt(link, extraContext = '') {
     '반드시 한국어로 답해줘.',
     '링크에서 직접 확인한 정보만 사용하고, 추측/상상/일반 지식 보완을 금지해.',
     '링크 접근 실패, 자막 확보 실패, 본문 확인 실패 중 하나라도 있으면 판정은 반드시 "판별불가"로 해.',
-    '브랜드명/키워드(예: 시크릿팡)만으로 사실 판단하지 마.',
+    '브랜드명/키워드만으로 사실 판단하지 마.',
     '',
     '[1단계: 링크 내용 파악]',
     '- 링크의 핵심 내용을 먼저 요약해.',

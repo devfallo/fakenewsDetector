@@ -6,3 +6,4 @@ server/.gemini-profile
 .gemini-profile
 .DS_Store
 *.log
+.env
