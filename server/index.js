@@ -152,6 +152,83 @@ async function findGeminiInput(page) {
   return null;
 }
 
+async function setPromptToInput(page, prompt) {
+  const result = await page
+    .evaluate((text) => {
+      const candidates = [
+        'textarea[aria-label*="Enter a prompt"]',
+        'textarea[aria-label*="프롬프트"]',
+        'textarea[placeholder*="Enter a prompt"]',
+        'textarea[placeholder*="프롬프트"]',
+        'textarea',
+        '[contenteditable="true"]'
+      ];
+
+      for (const selector of candidates) {
+        const node = document.querySelector(selector);
+        if (!node) {
+          continue;
+        }
+
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) {
+          continue;
+        }
+
+        node.focus();
+        if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+          node.value = text;
+          node.dispatchEvent(new Event('input', { bubbles: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+
+        if (node instanceof HTMLElement && node.isContentEditable) {
+          node.innerText = text;
+          node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+          return true;
+        }
+      }
+
+      return false;
+    }, prompt)
+    .catch(() => false);
+
+  return result;
+}
+
+async function findSendButton(page) {
+  const selectors = [
+    'button[aria-label*="보내기"]',
+    'button[aria-label*="Send"]',
+    'button[aria-label*="전송"]',
+    'button[data-test-id*="send"]',
+    'button.send-button',
+    'button:has-text("보내기")',
+    'button:has-text("Send")',
+    'button:has-text("전송")'
+  ];
+
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    const visible = await button.isVisible().catch(() => false);
+    const enabled = await button.isEnabled().catch(() => false);
+    if (visible && enabled) {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+async function isGenerationStarted(page) {
+  return page
+    .locator('button:has-text("Stop"), button:has-text("중지"), button[aria-label*="Stop"], button[aria-label*="중지"]')
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
 async function fillPromptAndSend(page, prompt) {
   const input = await findGeminiInput(page);
   if (!input) {
@@ -178,47 +255,45 @@ async function fillPromptAndSend(page, prompt) {
     await page.waitForTimeout(400);
   }
 
-  const sendButtonSelectors = [
-    'button[aria-label*="Send"]',
-    'button[aria-label*="전송"]',
-    'button[data-test-id*="send"]',
-    'button.send-button'
-  ];
-
-  const isGenerationStarted = async () =>
-    page
-      .locator('button:has-text("Stop"), button:has-text("중지")')
-      .first()
-      .isVisible()
-      .catch(() => false);
+  // 프로그램적 붙여넣기 후에도 버튼 활성화를 위해 입력 이벤트를 한번 더 강제한다.
+  await setPromptToInput(page, prompt).catch(() => {});
+  await page.waitForTimeout(500);
 
   // 요청사항: 붙여넣기 후 1초 정도 대기한 뒤 Enter 전송.
   await page.waitForTimeout(1000);
 
+  // 1) Enter 전송 시도
   for (let i = 0; i < 3; i += 1) {
     await input.press('Enter').catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
     await page.waitForTimeout(1000);
-    if (await isGenerationStarted()) {
+    if (await isGenerationStarted(page)) {
       return;
     }
   }
 
-  for (const selector of sendButtonSelectors) {
-    const button = page.locator(selector).first();
-    const enabled = await button.isEnabled().catch(() => false);
-    const visible = await button.isVisible().catch(() => false);
-    if (visible && enabled) {
-      await button.click({ timeout: 2500 }).catch(() => {});
+  // 2) 보내기 버튼 클릭 시도
+  for (let i = 0; i < 4; i += 1) {
+    const sendButton = await findSendButton(page);
+    if (sendButton) {
+      await sendButton.click({ timeout: 2500 }).catch(() => {});
       await page.waitForTimeout(1000);
-      if (await isGenerationStarted()) {
+      if (await isGenerationStarted(page)) {
         return;
       }
     }
+
+    // 버튼 비활성 상태를 대비해 재입력 + Enter를 다시 시도
+    await setPromptToInput(page, prompt).catch(() => {});
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(1000);
+    if (await isGenerationStarted(page)) {
+      return;
+    }
   }
 
-  // UI 반영 지연 가능성을 고려해 짧게 추가 대기 후 상위 로직으로 진행.
-  await page.waitForTimeout(1500);
+  throw new Error('Gemini 전송이 시작되지 않았습니다. 입력창/전송 버튼 상태를 확인하세요.');
 }
 
 const RESPONSE_NODE_SELECTOR = 'model-response, .model-response-text, .response-content, markdown, .markdown';
@@ -321,13 +396,16 @@ async function waitForResponse(page, timeoutMs, baselineCount = 0) {
   const settleMs = 4500;
   const pollIntervalMs = 1200;
   let seenNewResponse = false;
+  let generationStarted = false;
+  let generationFinishedAt = 0;
 
   while (Date.now() - start < timeoutMs) {
-    const stopVisible = await page
-      .locator('button:has-text("Stop"), button:has-text("중지")')
-      .first()
-      .isVisible()
-      .catch(() => false);
+    const stopVisible = await isGenerationStarted(page);
+    if (stopVisible) {
+      generationStarted = true;
+    } else if (generationStarted && generationFinishedAt === 0) {
+      generationFinishedAt = Date.now();
+    }
 
     const currentCount = await getResponseNodeCount(page);
     if (currentCount > baselineCount) {
@@ -346,7 +424,10 @@ async function waitForResponse(page, timeoutMs, baselineCount = 0) {
       lastUpdatedAt = Date.now();
     }
 
-    if (!stopVisible && (seenNewResponse || best.length > 30) && Date.now() - lastUpdatedAt >= settleMs) {
+    const finishedStable =
+      generationFinishedAt > 0 && Date.now() - generationFinishedAt >= 2000 && Date.now() - lastUpdatedAt >= settleMs;
+
+    if (!stopVisible && (seenNewResponse || best.length > 30) && finishedStable) {
       return collectFullResponseWithScroll(page, best, baselineCount);
     }
 
