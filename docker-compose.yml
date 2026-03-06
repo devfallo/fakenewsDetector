@@ -12,7 +12,7 @@ services:
       GEMINI_HEADLESS: "true"
       GEMINI_TIMEOUT_MS: "90000"
       GEMINI_LOGIN_WAIT_MS: "300000"
-      GEMINI_CDP_URL: "ws://host.docker.internal:9222/devtools/browser/29202130-9ce3-44c8-8a56-557033cae847"
+      GEMINI_CDP_URL: "http://192.168.65.254:9222"
       GEMINI_REQUIRE_LOGIN: "true"
     volumes:
       - ./server/.gemini-profile:/app/.gemini-profile
