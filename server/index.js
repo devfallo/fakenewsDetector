@@ -221,27 +221,29 @@ async function fillPromptAndSend(page, prompt) {
   await page.waitForTimeout(1500);
 }
 
-async function getLatestResponseByDom(page) {
-  const text = await page
-    .evaluate(() => {
-      const selectors = [
-        'model-response',
-        '.model-response-text',
-        '.response-content',
-        'markdown',
-        '.markdown'
-      ];
+const RESPONSE_NODE_SELECTOR = 'model-response, .model-response-text, .response-content, markdown, .markdown';
 
-      const nodes = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+async function getResponseNodeCount(page) {
+  return page
+    .evaluate((selector) => document.querySelectorAll(selector).length, RESPONSE_NODE_SELECTOR)
+    .catch(() => 0);
+}
+
+async function getLatestResponseByDom(page, baselineCount = 0) {
+  const text = await page
+    .evaluate(({ selector, baseline }) => {
+      const nodes = Array.from(document.querySelectorAll(selector));
       if (nodes.length === 0) {
         return '';
       }
 
-      const latest = nodes[nodes.length - 1];
+      const fromIndex = Math.max(0, Math.min(baseline, nodes.length - 1));
+      const candidates = nodes.slice(fromIndex);
+      const latest = candidates[candidates.length - 1] || nodes[nodes.length - 1];
       const innerText = (latest.innerText || '').trim();
       const textContent = (latest.textContent || '').trim();
       return innerText.length >= textContent.length ? innerText : textContent;
-    })
+    }, { selector: RESPONSE_NODE_SELECTOR, baseline: baselineCount })
     .catch(() => '');
 
   return text.trim();
@@ -271,12 +273,20 @@ async function getLatestResponseByCopy(page) {
   }
 }
 
-async function collectFullResponseWithScroll(page, initialText = '') {
+async function collectFullResponseWithScroll(page, initialText = '', baselineCount = 0) {
   let best = initialText.trim();
 
   for (let i = 0; i < 8; i += 1) {
     await page
       .evaluate(() => {
+        const expandButtons = Array.from(document.querySelectorAll('button'));
+        for (const button of expandButtons) {
+          const text = (button.textContent || '').trim().toLowerCase();
+          if (text.includes('더보기') || text.includes('show more') || text.includes('계속')) {
+            button.click();
+          }
+        }
+
         window.scrollTo(0, document.body.scrollHeight);
         const candidates = document.querySelectorAll(
           'model-response, .model-response-text, .response-content, markdown, .markdown'
@@ -293,7 +303,7 @@ async function collectFullResponseWithScroll(page, initialText = '') {
       best = copied;
     }
 
-    const fromDom = await getLatestResponseByDom(page);
+    const fromDom = await getLatestResponseByDom(page, baselineCount);
     if (fromDom.length > best.length) {
       best = fromDom;
     }
@@ -304,12 +314,13 @@ async function collectFullResponseWithScroll(page, initialText = '') {
   return best;
 }
 
-async function waitForResponse(page, timeoutMs) {
+async function waitForResponse(page, timeoutMs, baselineCount = 0) {
   const start = Date.now();
   let best = '';
   let lastUpdatedAt = start;
   const settleMs = 4500;
   const pollIntervalMs = 1200;
+  let seenNewResponse = false;
 
   while (Date.now() - start < timeoutMs) {
     const stopVisible = await page
@@ -318,27 +329,32 @@ async function waitForResponse(page, timeoutMs) {
       .isVisible()
       .catch(() => false);
 
+    const currentCount = await getResponseNodeCount(page);
+    if (currentCount > baselineCount) {
+      seenNewResponse = true;
+    }
+
     const copied = await getLatestResponseByCopy(page);
     if (copied.length > best.length) {
       best = copied;
       lastUpdatedAt = Date.now();
     }
 
-    const latest = await getLatestResponseByDom(page);
+    const latest = await getLatestResponseByDom(page, baselineCount);
     if (latest.length > best.length) {
       best = latest;
       lastUpdatedAt = Date.now();
     }
 
-    if (!stopVisible && best.length > 30 && Date.now() - lastUpdatedAt >= settleMs) {
-      return collectFullResponseWithScroll(page, best);
+    if (!stopVisible && (seenNewResponse || best.length > 30) && Date.now() - lastUpdatedAt >= settleMs) {
+      return collectFullResponseWithScroll(page, best, baselineCount);
     }
 
     await page.waitForTimeout(pollIntervalMs);
   }
 
   if (best.length > 0) {
-    return collectFullResponseWithScroll(page, best);
+    return collectFullResponseWithScroll(page, best, baselineCount);
   }
 
   throw new Error('Gemini 응답을 시간 내에 가져오지 못했습니다.');
@@ -351,8 +367,9 @@ async function askGeminiByWeb(prompt) {
     console.log('[Gemini] prompt to send:\n', prompt);
     await page.bringToFront().catch(() => {});
     await ensureGeminiReady(page);
+    const baselineCount = await getResponseNodeCount(page);
     await fillPromptAndSend(page, prompt);
-    const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS);
+    const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS, baselineCount);
     console.log(`[Gemini] response length: ${answer.length}`);
     return answer;
   } finally {
