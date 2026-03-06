@@ -229,7 +229,44 @@ async function isGenerationStarted(page) {
     .catch(() => false);
 }
 
-async function fillPromptAndSend(page, prompt) {
+async function triggerSendByDom(page) {
+  return page
+    .evaluate(() => {
+      const buttonSelectors = [
+        'button[aria-label*="보내기"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="전송"]',
+        'button[data-test-id*="send"]',
+        'button.send-button',
+        'button:has-text("보내기")',
+        'button:has-text("Send")',
+        'button:has-text("전송")'
+      ];
+
+      for (const selector of buttonSelectors) {
+        const node = document.querySelector(selector);
+        if (node instanceof HTMLButtonElement && !node.disabled) {
+          node.click();
+          return true;
+        }
+      }
+
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        const form = active.closest('form');
+        if (form) {
+          form.requestSubmit?.();
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          return true;
+        }
+      }
+
+      return false;
+    })
+    .catch(() => false);
+}
+
+async function fillPromptAndSend(page, prompt, baselineCount = 0) {
   const input = await findGeminiInput(page);
   if (!input) {
     throw new Error('Gemini 입력창을 찾지 못했습니다. 페이지가 완전히 로드되었는지 확인하세요.');
@@ -267,7 +304,7 @@ async function fillPromptAndSend(page, prompt) {
     await input.press('Enter').catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
     await page.waitForTimeout(1000);
-    if (await isGenerationStarted(page)) {
+    if ((await isGenerationStarted(page)) || (await getResponseNodeCount(page)) > baselineCount) {
       return;
     }
   }
@@ -278,7 +315,16 @@ async function fillPromptAndSend(page, prompt) {
     if (sendButton) {
       await sendButton.click({ timeout: 2500 }).catch(() => {});
       await page.waitForTimeout(1000);
-      if (await isGenerationStarted(page)) {
+      if ((await isGenerationStarted(page)) || (await getResponseNodeCount(page)) > baselineCount) {
+        return;
+      }
+    }
+
+    // 3) DOM 강제 클릭/submit 시도
+    const domTriggered = await triggerSendByDom(page);
+    if (domTriggered) {
+      await page.waitForTimeout(1200);
+      if ((await isGenerationStarted(page)) || (await getResponseNodeCount(page)) > baselineCount) {
         return;
       }
     }
@@ -288,7 +334,7 @@ async function fillPromptAndSend(page, prompt) {
     await page.waitForTimeout(500);
     await page.keyboard.press('Enter').catch(() => {});
     await page.waitForTimeout(1000);
-    if (await isGenerationStarted(page)) {
+    if ((await isGenerationStarted(page)) || (await getResponseNodeCount(page)) > baselineCount) {
       return;
     }
   }
@@ -396,16 +442,10 @@ async function waitForResponse(page, timeoutMs, baselineCount = 0) {
   const settleMs = 4500;
   const pollIntervalMs = 1200;
   let seenNewResponse = false;
-  let generationStarted = false;
-  let generationFinishedAt = 0;
+  let stableSince = 0;
 
   while (Date.now() - start < timeoutMs) {
     const stopVisible = await isGenerationStarted(page);
-    if (stopVisible) {
-      generationStarted = true;
-    } else if (generationStarted && generationFinishedAt === 0) {
-      generationFinishedAt = Date.now();
-    }
 
     const currentCount = await getResponseNodeCount(page);
     if (currentCount > baselineCount) {
@@ -424,10 +464,16 @@ async function waitForResponse(page, timeoutMs, baselineCount = 0) {
       lastUpdatedAt = Date.now();
     }
 
-    const finishedStable =
-      generationFinishedAt > 0 && Date.now() - generationFinishedAt >= 2000 && Date.now() - lastUpdatedAt >= settleMs;
+    if (Date.now() - lastUpdatedAt >= settleMs) {
+      if (stableSince === 0) {
+        stableSince = Date.now();
+      }
+    } else {
+      stableSince = 0;
+    }
 
-    if (!stopVisible && (seenNewResponse || best.length > 30) && finishedStable) {
+    // Stop 버튼 감지가 실패하는 UI 변형이 있어도 텍스트가 충분히 안정화되면 완료로 본다.
+    if (!stopVisible && (seenNewResponse || best.length > 30) && stableSince > 0) {
       return collectFullResponseWithScroll(page, best, baselineCount);
     }
 
@@ -449,7 +495,7 @@ async function askGeminiByWeb(prompt) {
     await page.bringToFront().catch(() => {});
     await ensureGeminiReady(page);
     const baselineCount = await getResponseNodeCount(page);
-    await fillPromptAndSend(page, prompt);
+    await fillPromptAndSend(page, prompt, baselineCount);
     const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS, baselineCount);
     console.log(`[Gemini] response length: ${answer.length}`);
     return answer;
