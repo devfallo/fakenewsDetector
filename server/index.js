@@ -168,7 +168,7 @@ async function fillPromptAndSend(page, prompt) {
   await page.keyboard.press('Backspace').catch(() => {});
   await page.keyboard.press('Meta+V').catch(() => {});
   await page.keyboard.press('Control+V').catch(() => {});
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1500);
 
   const inputText = (await input.textContent().catch(() => '')) || '';
   if (!inputText.trim()) {
