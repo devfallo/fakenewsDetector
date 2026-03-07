@@ -356,6 +356,9 @@ async function applyStealthHints(page) {
     return;
   }
 
+  const spoofedUserAgent =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
+
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'language', { get: () => 'ko-KR' });
@@ -370,15 +373,16 @@ async function applyStealthHints(page) {
       Object.defineProperty(window, 'chrome', { value: { runtime: {} }, configurable: true });
     }
   });
+  await page.addInitScript((ua) => {
+    Object.defineProperty(navigator, 'userAgent', { get: () => ua, configurable: true });
+    Object.defineProperty(navigator, 'appVersion', { get: () => ua, configurable: true });
+  }, spoofedUserAgent);
 
   await page.setExtraHTTPHeaders({
     'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
   });
 
   await page.setViewportSize({ width: 1366, height: 900 });
-  await page.setUserAgent(
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
-  );
 }
 
 function isLikelyInvalidSummaryText(text) {
