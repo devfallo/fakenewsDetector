@@ -6,14 +6,19 @@ services:
     container_name: fakenews-detector-server
     ports:
       - "8787:8080"
+      - "6080:6080"
     environment:
       PORT: "8080"
       GEMINI_URL: "https://gemini.google.com/app"
-      GEMINI_HEADLESS: "true"
+      GEMINI_RUN_MODE: "headless"
       GEMINI_TIMEOUT_MS: "90000"
       GEMINI_LOGIN_WAIT_MS: "300000"
-      GEMINI_CDP_URL: "http://192.168.65.254:9222"
+      GEMINI_CDP_URL: ""
       GEMINI_REQUIRE_LOGIN: "true"
+      ENABLE_VNC: "false"
+      NOVNC_PORT: "6080"
+      VNC_PORT: "5900"
+      DISPLAY: ":99"
     volumes:
       - ./server/.gemini-profile:/app/.gemini-profile
     restart: unless-stopped

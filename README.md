@@ -39,7 +39,7 @@ npm run dev
 
 - `PORT`: 서버 포트 (기본 `8787`)
 - `GEMINI_URL`: Gemini 주소 (기본 `https://gemini.google.com/app`)
-- `GEMINI_HEADLESS`: `true`면 헤드리스 실행
+- `GEMINI_RUN_MODE`: 실행 모드 (`headless` | `cdp` | `novnc`, 기본 `headless`)
 - `GEMINI_TIMEOUT_MS`: 응답 대기 시간(ms)
 - `GEMINI_LOGIN_WAIT_MS`: 로그인 대기 시간(ms, 기본 `300000`)
 - `GEMINI_REQUIRE_LOGIN`: `true`면 비로그인 상태에서 즉시 오류 반환
@@ -152,6 +152,21 @@ docker compose up -d --build
 ```bash
 curl http://localhost:8787/api/health
 ```
+
+기본 구성은 `headless` 모드입니다.
+
+- `GEMINI_RUN_MODE=headless` (기본)
+- `GEMINI_RUN_MODE=cdp` + `GEMINI_CDP_URL` 설정 시 호스트 Chrome 세션 재사용
+- `GEMINI_RUN_MODE=novnc` 시 컨테이너 내부 가상 GUI + noVNC 사용
+
+### noVNC로 로그인하기
+
+`GEMINI_RUN_MODE=novnc`일 때 컨테이너 실행 후 브라우저에서 아래 주소로 접속:
+
+- `http://localhost:6080/vnc.html`
+
+접속되면 컨테이너 내부 GUI 화면에서 Gemini 로그인 후 세션을 유지할 수 있습니다.
+로그인 세션은 볼륨(`./server/.gemini-profile`)에 저장됩니다.
 
 ### 2) Dockerfile로 직접 실행
 
