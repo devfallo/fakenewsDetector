@@ -25,6 +25,7 @@ const GEMINI_REQUIRE_LOGIN = String(process.env.GEMINI_REQUIRE_LOGIN || 'true') 
 const GEMINI_CDP_URL = (process.env.GEMINI_CDP_URL || '').trim();
 const GEMINI_HEADLESS = GEMINI_RUN_MODE === 'novnc' ? false : GEMINI_RUN_MODE === 'headless';
 const LOGIN_REQUIRED_FOR_MODE = GEMINI_RUN_MODE === 'cdp' && GEMINI_REQUIRE_LOGIN;
+const YOUTUBE_SUMMARY_STEALTH = String(process.env.YOUTUBE_SUMMARY_STEALTH || 'true') === 'true';
 
 app.use(cors());
 app.use(express.json());
@@ -350,16 +351,72 @@ async function extractMeaningfulTextFromPage(page) {
     .catch(() => '');
 }
 
+async function applyStealthHints(page) {
+  if (!YOUTUBE_SUMMARY_STEALTH) {
+    return;
+  }
+
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'language', { get: () => 'ko-KR' });
+    Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en-US', 'en'] });
+    Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [{ name: 'Chrome PDF Plugin' }, { name: 'Chrome PDF Viewer' }, { name: 'Native Client' }]
+    });
+
+    if (!window.chrome) {
+      // 일부 anti-bot 스크립트에서 window.chrome 존재 여부를 체크한다.
+      Object.defineProperty(window, 'chrome', { value: { runtime: {} }, configurable: true });
+    }
+  });
+
+  await page.setExtraHTTPHeaders({
+    'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+  });
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.setUserAgent(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
+  );
+}
+
+function isLikelyInvalidSummaryText(text) {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  const invalidMarkers = [
+    'try a few examples',
+    'or, you can see some recently summarized videos',
+    'state of the union address',
+    'san francisco school board meeting',
+    'theory of relativity lecture at stanford',
+    'all-in podcast'
+  ];
+
+  if (invalidMarkers.some((marker) => normalized.includes(marker))) {
+    return true;
+  }
+
+  // 요약 결과치고 지나치게 메뉴/랜딩 문구 위주면 무효 처리.
+  const genericUiWords = ['example', 'recently', 'summarized', 'video', 'podcast', 'lecture'];
+  const genericHits = genericUiWords.filter((word) => normalized.includes(word)).length;
+  if (genericHits >= 4 && normalized.length < 600) {
+    return true;
+  }
+
+  return false;
+}
+
 async function fetchYouTubeSummaryFromProvider(context, provider, youtubeLink) {
   const page = await context.newPage();
   try {
+    await applyStealthHints(page);
     await page.goto(
       provider.url.includes('{url}')
         ? provider.url.replace('{url}', encodeURIComponent(youtubeLink))
         : provider.url,
       { waitUntil: 'domcontentloaded', timeout: 60000 }
     );
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1800);
 
     const antiBotDetected = await page
       .evaluate(() => {
@@ -398,10 +455,13 @@ async function fetchYouTubeSummaryFromProvider(context, provider, youtubeLink) {
       }
     }
 
-    await page.waitForTimeout(7000);
+    await page.waitForTimeout(8000);
     const text = await extractMeaningfulTextFromPage(page);
     if (!text || text.length < 120) {
       throw new Error('summary text too short');
+    }
+    if (isLikelyInvalidSummaryText(text)) {
+      throw new Error('summary text looks like landing/sample content');
     }
     return text;
   } finally {

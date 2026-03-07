@@ -19,6 +19,7 @@ services:
       NOVNC_PORT: "6080"
       VNC_PORT: "5900"
       DISPLAY: ":99"
+      YOUTUBE_SUMMARY_STEALTH: "true"
     volumes:
       - ./server/.gemini-profile:/app/.gemini-profile
     restart: unless-stopped
