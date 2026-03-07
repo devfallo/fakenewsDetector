@@ -2,16 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
-import { YoutubeTranscript } from 'youtube-transcript';
 import { existsSync, rmSync } from 'fs';
-import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -23,9 +16,12 @@ const GEMINI_RUN_MODE = String(process.env.GEMINI_RUN_MODE || 'headless').toLowe
 const GEMINI_PROFILE_DIR = path.resolve(process.env.GEMINI_PROFILE_DIR || path.resolve(process.cwd(), '.gemini-profile'));
 const GEMINI_REQUIRE_LOGIN = String(process.env.GEMINI_REQUIRE_LOGIN || 'true') === 'true';
 const GEMINI_CDP_URL = (process.env.GEMINI_CDP_URL || '').trim();
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
+const GEMINI_API_MODEL = (process.env.GEMINI_API_MODEL || 'gemini-2.5-flash-lite').trim();
 const GEMINI_HEADLESS = GEMINI_RUN_MODE === 'novnc' ? false : GEMINI_RUN_MODE === 'headless';
-const LOGIN_REQUIRED_FOR_MODE = GEMINI_RUN_MODE === 'cdp' && GEMINI_REQUIRE_LOGIN;
-const YOUTUBE_SUMMARY_STEALTH = String(process.env.YOUTUBE_SUMMARY_STEALTH || 'true') === 'true';
+const LOGIN_REQUIRED_FOR_MODE = GEMINI_REQUIRE_LOGIN;
+const GEMINI_STEALTH =
+  String(process.env.GEMINI_STEALTH || process.env.YOUTUBE_SUMMARY_STEALTH || 'true') === 'true';
 
 app.use(cors());
 app.use(express.json());
@@ -51,6 +47,10 @@ function cleanupProfileSingletonLocks(profileDir) {
 }
 
 async function getContext() {
+  if (GEMINI_RUN_MODE === 'geminiapi') {
+    throw new Error('GEMINI_RUN_MODE=geminiapi 모드에서는 브라우저 컨텍스트를 사용하지 않습니다.');
+  }
+
   if (!browserContextPromise) {
     if (GEMINI_RUN_MODE === 'cdp') {
       if (!GEMINI_CDP_URL) {
@@ -130,229 +130,8 @@ function buildPrompt(link, extraContext = '') {
     .join('\n');
 }
 
-function extractYouTubeVideoId(link) {
-  try {
-    const url = new URL(link);
-    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
-
-    if (host === 'youtu.be') {
-      return url.pathname.split('/').filter(Boolean)[0] || null;
-    }
-
-    if (host === 'youtube.com' || host === 'm.youtube.com') {
-      if (url.pathname === '/watch') {
-        return url.searchParams.get('v');
-      }
-
-      const parts = url.pathname.split('/').filter(Boolean);
-      if (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live') {
-        return parts[1] || null;
-      }
-    }
-  } catch (_err) {
-    return null;
-  }
-
-  return null;
-}
-
-function isYouTubeLink(link) {
-  return Boolean(extractYouTubeVideoId(link));
-}
-
-async function fetchYouTubeTranscript(link) {
-  const videoId = extractYouTubeVideoId(link);
-  if (!videoId) {
-    throw new Error('유튜브 링크에서 video id를 찾지 못했습니다.');
-  }
-
-  let items = null;
-  // 1차: youtube-transcript
-  items =
-    (await YoutubeTranscript.fetchTranscript(videoId, { lang: 'ko' }).catch(() => null)) ||
-    (await YoutubeTranscript.fetchTranscript(videoId).catch(() => null));
-
-  if (items && items.length > 0) {
-    const transcript = items
-      .map((item) => item.text?.trim() || '')
-      .filter(Boolean)
-      .join(' ');
-
-    if (transcript.trim()) {
-      return { videoId, transcript: transcript.trim(), source: 'youtube-transcript' };
-    }
-  }
-
-  // 2차: yt-dlp 자막 fallback
-  const transcriptByYtDlp = await fetchYouTubeTranscriptByYtDlp(link).catch(() => '');
-  if (transcriptByYtDlp.trim()) {
-    return { videoId, transcript: transcriptByYtDlp.trim(), source: 'yt-dlp' };
-  }
-
-  throw new Error('유튜브 자막을 가져오지 못했습니다. 자막 비공개/미지원 영상일 수 있습니다.');
-}
-
-async function fetchYouTubeMetadataByYtDlp(link) {
-  const { stdout } = await execFileAsync(
-    'yt-dlp',
-    ['--skip-download', '--no-warnings', '--dump-single-json', link],
-    { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
-  );
-
-  const data = JSON.parse(stdout || '{}');
-  const title = String(data.title || '').trim();
-  const uploader = String(data.uploader || data.channel || '').trim();
-  const description = String(data.description || '').trim();
-  const duration = Number.isFinite(data.duration) ? Number(data.duration) : null;
-
-  const text = [
-    title ? `제목: ${title}` : '',
-    uploader ? `채널: ${uploader}` : '',
-    duration ? `길이(초): ${duration}` : '',
-    description ? `설명: ${description}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  return {
-    text,
-    hasEnoughInfo: text.replace(/\s+/g, '').length >= 60
-  };
-}
-
-function vttToPlainText(vtt) {
-  return vtt
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => line !== 'WEBVTT')
-    .filter((line) => !line.startsWith('NOTE'))
-    .filter((line) => !line.includes('-->'))
-    .filter((line) => !/^\d+$/.test(line))
-    .map((line) => line.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'))
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-async function fetchYouTubeTranscriptByYtDlp(link) {
-  const workDir = await mkdtemp(path.join(tmpdir(), 'yt-sub-'));
-  try {
-    const outputTemplate = path.join(workDir, 'sub.%(ext)s');
-    await execFileAsync('yt-dlp', [
-      '--skip-download',
-      '--no-warnings',
-      '--write-auto-subs',
-      '--write-subs',
-      '--sub-langs',
-      'ko.*,ko,en.*,en',
-      '--sub-format',
-      'vtt',
-      '--output',
-      outputTemplate,
-      link
-    ], { timeout: 120000 });
-
-    const files = await readdir(workDir);
-    const vttFile = files.find((name) => name.endsWith('.vtt'));
-    if (!vttFile) {
-      return '';
-    }
-
-    const vtt = await readFile(path.join(workDir, vttFile), 'utf-8');
-    return vttToPlainText(vtt);
-  } finally {
-    await rm(workDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-function buildYouTubeSummaryPrompt(link, transcript, extraContext = '') {
-  const maxChars = 15000;
-  const clippedTranscript = transcript.length > maxChars ? `${transcript.slice(0, maxChars)}...` : transcript;
-
-  return [
-    '너는 영상 요약 도우미야.',
-    '반드시 한국어로 답해줘.',
-    '아래 유튜브 자막(대본) 텍스트만 기준으로 요약해. 외부 추측은 금지해.',
-    '',
-    '출력 형식:',
-    '1) 한줄요약: [1문장]',
-    '2) 핵심내용: [bullet 5~10개]',
-    '3) 주요발언/주장: [bullet 3~8개]',
-    '4) 주의사항: [자막만 기준으로 판단한 한계 2~4개]',
-    '',
-    `링크: ${link}`,
-    extraContext ? `사용자 추가설명: ${extraContext}` : '',
-    '',
-    '[유튜브 자막/대본 시작]',
-    clippedTranscript,
-    '[유튜브 자막/대본 끝]'
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-function buildYouTubeSummaryPromptFromSource(link, sourceText, sourceLabel, extraContext = '') {
-  const maxChars = 15000;
-  const clipped = sourceText.length > maxChars ? `${sourceText.slice(0, maxChars)}...` : sourceText;
-
-  return [
-    '너는 영상 요약 도우미야.',
-    '반드시 한국어로 답해줘.',
-    '아래 자료만 기준으로 요약해. 외부 추측/외부 사실 보강은 금지해.',
-    '',
-    '출력 형식:',
-    '1) 한줄요약: [1문장]',
-    '2) 핵심내용: [bullet 5~10개]',
-    '3) 주요발언/주장: [bullet 3~8개]',
-    '4) 주의사항: [자료 기반 요약 한계 2~4개]',
-    '',
-    `링크: ${link}`,
-    `자료출처: ${sourceLabel}`,
-    extraContext ? `사용자 추가설명: ${extraContext}` : '',
-    '',
-    '[요약 대상 자료 시작]',
-    clipped,
-    '[요약 대상 자료 끝]'
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-async function extractMeaningfulTextFromPage(page) {
-  return page
-    .evaluate(() => {
-      const badTags = new Set(['SCRIPT', 'STYLE', 'NAV', 'HEADER', 'FOOTER', 'NOSCRIPT']);
-      const candidates = Array.from(
-        document.querySelectorAll(
-          'main, article, section, [class*="summary"], [class*="content"], [class*="result"], [data-testid*="summary"], .markdown, .prose'
-        )
-      );
-
-      let best = '';
-      for (const node of candidates) {
-        if (!node || badTags.has(node.tagName)) {
-          continue;
-        }
-        const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
-        if (text.length > best.length) {
-          best = text;
-        }
-      }
-
-      if (best.length >= 200) {
-        return best;
-      }
-
-      const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-      return body;
-    })
-    .then((text) => text.trim())
-    .catch(() => '');
-}
-
 async function applyStealthHints(page) {
-  if (!YOUTUBE_SUMMARY_STEALTH) {
+  if (!GEMINI_STEALTH) {
     return;
   }
 
@@ -385,118 +164,9 @@ async function applyStealthHints(page) {
   await page.setViewportSize({ width: 1366, height: 900 });
 }
 
-function isLikelyInvalidSummaryText(text) {
-  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
-  const invalidMarkers = [
-    'try a few examples',
-    'or, you can see some recently summarized videos',
-    'state of the union address',
-    'san francisco school board meeting',
-    'theory of relativity lecture at stanford',
-    'all-in podcast'
-  ];
-
-  if (invalidMarkers.some((marker) => normalized.includes(marker))) {
-    return true;
-  }
-
-  // 요약 결과치고 지나치게 메뉴/랜딩 문구 위주면 무효 처리.
-  const genericUiWords = ['example', 'recently', 'summarized', 'video', 'podcast', 'lecture'];
-  const genericHits = genericUiWords.filter((word) => normalized.includes(word)).length;
-  if (genericHits >= 4 && normalized.length < 600) {
-    return true;
-  }
-
-  return false;
-}
-
-async function fetchYouTubeSummaryFromProvider(context, provider, youtubeLink) {
-  const page = await context.newPage();
-  try {
-    await applyStealthHints(page);
-    await page.goto(
-      provider.url.includes('{url}')
-        ? provider.url.replace('{url}', encodeURIComponent(youtubeLink))
-        : provider.url,
-      { waitUntil: 'domcontentloaded', timeout: 60000 }
-    );
-    await page.waitForTimeout(1800);
-
-    const antiBotDetected = await page
-      .evaluate(() => {
-        const text = (document.body?.innerText || '').toLowerCase();
-        return (
-          text.includes('verify you are human') ||
-          text.includes('i am human') ||
-          text.includes('cloudflare') ||
-          text.includes('captcha')
-        );
-      })
-      .catch(() => false);
-    if (antiBotDetected) {
-      throw new Error('anti-bot challenge detected');
-    }
-
-    if (provider.requiresForm) {
-      const input = page.locator('input[type="url"], input[placeholder*="YouTube"], textarea').first();
-      const visible = await input.isVisible().catch(() => false);
-      if (visible) {
-        await input.fill(youtubeLink).catch(async () => {
-          await input.click().catch(() => {});
-          await page.keyboard.type(youtubeLink, { delay: 3 }).catch(() => {});
-        });
-      }
-
-      const submit = page
-        .locator(
-          'button[type="submit"], button:has-text("Summarize"), button:has-text("Generate"), button:has-text("Get"), button:has-text("요약")'
-        )
-        .first();
-      if (await submit.isVisible().catch(() => false)) {
-        await submit.click({ timeout: 5000 }).catch(() => {});
-      } else {
-        await page.keyboard.press('Enter').catch(() => {});
-      }
-    }
-
-    await page.waitForTimeout(8000);
-    const text = await extractMeaningfulTextFromPage(page);
-    if (!text || text.length < 120) {
-      throw new Error('summary text too short');
-    }
-    if (isLikelyInvalidSummaryText(text)) {
-      throw new Error('summary text looks like landing/sample content');
-    }
-    return text;
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-async function fetchYouTubeSummaryFromWebsites(link) {
-  const context = await getContext();
-  const providers = [
-    { name: 'summarize.tech', url: 'https://www.summarize.tech/?url={url}', requiresForm: false },
-    { name: 'solidpoint.ai', url: 'https://solidpoint.ai/tools/youtube-summary', requiresForm: true },
-    { name: 'tammy.ai', url: 'https://tammy.ai', requiresForm: true }
-  ];
-
-  const errors = [];
-  for (const provider of providers) {
-    try {
-      const summaryText = await fetchYouTubeSummaryFromProvider(context, provider, link);
-      return { source: provider.name, summaryText };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`${provider.name}: ${message}`);
-    }
-  }
-
-  throw new Error(`요약 사이트 추출 실패 (${errors.join(' | ')})`);
-}
-
 async function ensureGeminiReady(page, options = {}) {
   const { allowLoginPage = false } = options;
+  await applyStealthHints(page);
   await page.bringToFront().catch(() => {});
   if (GEMINI_RUN_MODE !== 'cdp') {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
@@ -915,11 +585,67 @@ async function askGeminiByWeb(prompt) {
   }
 }
 
+async function askGeminiByApi(prompt) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    GEMINI_API_MODEL
+  )}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  console.log(`[GeminiAPI] model=${GEMINI_API_MODEL} promptLength=${prompt.length}`);
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const apiMessage =
+      data?.error?.message ||
+      data?.error?.status ||
+      `Gemini API 요청 실패 (status: ${response.status})`;
+    throw new Error(apiMessage);
+  }
+
+  const text = (data?.candidates || [])
+    .flatMap((candidate) => candidate?.content?.parts || [])
+    .map((part) => part?.text || '')
+    .join('\n')
+    .trim();
+
+  if (!text) {
+    throw new Error('Gemini API 응답 텍스트가 비어 있습니다.');
+  }
+
+  console.log(`[GeminiAPI] response length: ${text.length}`);
+  return text;
+}
+
+async function askGemini(prompt) {
+  if (GEMINI_RUN_MODE === 'geminiapi') {
+    return askGeminiByApi(prompt);
+  }
+  return askGeminiByWeb(prompt);
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, at: new Date().toISOString() });
 });
 
 app.get('/api/open-gemini', async (_req, res) => {
+  if (GEMINI_RUN_MODE === 'geminiapi') {
+    return res.json({
+      ok: true,
+      message: 'geminiapi 모드입니다. 브라우저를 열지 않고 Gemini API를 사용합니다.'
+    });
+  }
+
   try {
     const context = await getContext();
     const page = await context.newPage();
@@ -934,6 +660,10 @@ app.get('/api/open-gemini', async (_req, res) => {
 });
 
 app.get('/api/auth-status', async (_req, res) => {
+  if (GEMINI_RUN_MODE === 'geminiapi') {
+    return res.json({ ok: true, loggedIn: true, mode: 'geminiapi' });
+  }
+
   try {
     const context = await getContext();
     const page = await context.newPage();
@@ -965,53 +695,8 @@ app.post('/api/check', async (req, res) => {
       console.log('[API] /api/check context: (empty)');
     }
 
-    let prompt;
-    if (isYouTubeLink(cleanLink)) {
-      let sourceText = '';
-      let sourceLabel = '';
-
-      try {
-        const websiteSummary = await fetchYouTubeSummaryFromWebsites(cleanLink);
-        sourceText = websiteSummary.summaryText;
-        sourceLabel = `summary-site:${websiteSummary.source}`;
-        console.log(
-          `[API] youtube summary fetched source=${websiteSummary.source} chars=${sourceText.length}`
-        );
-      } catch (summaryError) {
-        console.log(
-          `[API] youtube summary website failed: ${
-            summaryError instanceof Error ? summaryError.message : String(summaryError)
-          }`
-        );
-        try {
-          const { videoId, transcript, source } = await fetchYouTubeTranscript(cleanLink);
-          sourceText = transcript;
-          sourceLabel = `transcript:${source}`;
-          console.log(
-            `[API] youtube transcript fallback videoId=${videoId} chars=${transcript.length} source=${source}`
-          );
-        } catch (transcriptError) {
-          console.log(
-            `[API] youtube transcript fallback failed: ${
-              transcriptError instanceof Error ? transcriptError.message : String(transcriptError)
-            }`
-          );
-          const meta = await fetchYouTubeMetadataByYtDlp(cleanLink);
-          if (!meta.hasEnoughInfo) {
-            throw transcriptError;
-          }
-          sourceText = meta.text;
-          sourceLabel = 'metadata:yt-dlp';
-          console.log(`[API] youtube metadata fallback chars=${sourceText.length}`);
-        }
-      }
-
-      prompt = buildYouTubeSummaryPromptFromSource(cleanLink, sourceText, sourceLabel, cleanContext);
-    } else {
-      prompt = buildPrompt(cleanLink, cleanContext);
-    }
-
-    const result = await askGeminiByWeb(prompt);
+    const prompt = buildPrompt(cleanLink, cleanContext);
+    const result = await askGemini(prompt);
     return res.json({ ok: true, link, result });
   } catch (error) {
     if (error instanceof GeminiLoginRequiredError) {
