@@ -772,6 +772,16 @@ async function askGeminiByWebHeadless(prompt) {
     const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS, baselineCount);
     console.log(`[GeminiWebHeadless] response length: ${answer.length}`);
     return answer;
+  } catch (error) {
+    if (error instanceof GeminiLoginRequiredError) {
+      console.log('[GeminiWebHeadless] login required. fallback to Gemini API result.');
+      const fallback = await askGeminiByApi(prompt);
+      return [
+        '[HEADLESS 로그인 세션 미존재로 API 폴백]',
+        fallback
+      ].join('\n\n');
+    }
+    throw error;
   } finally {
     await page.close().catch(() => {});
   }
