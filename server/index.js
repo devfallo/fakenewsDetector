@@ -3,8 +3,14 @@ import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
 import { existsSync, rmSync } from 'fs';
+import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -125,6 +131,140 @@ function buildPrompt(link, extraContext = '') {
     '',
     `링크: ${link}`,
     extraContext ? `사용자 추가설명: ${extraContext}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractYouTubeVideoId(link) {
+  try {
+    const url = new URL(link);
+    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+
+    if (host === 'youtu.be') {
+      return url.pathname.split('/').filter(Boolean)[0] || null;
+    }
+
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      if (url.pathname === '/watch') {
+        return url.searchParams.get('v');
+      }
+
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live') {
+        return parts[1] || null;
+      }
+    }
+  } catch (_err) {
+    return null;
+  }
+
+  return null;
+}
+
+function isYouTubeLink(link) {
+  return Boolean(extractYouTubeVideoId(link));
+}
+
+function vttToPlainText(vtt) {
+  return vtt
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => line !== 'WEBVTT')
+    .filter((line) => !line.startsWith('NOTE'))
+    .filter((line) => !line.includes('-->'))
+    .filter((line) => !/^\d+$/.test(line))
+    .map((line) => line.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function fetchYouTubeTranscriptByYtDlp(link) {
+  const workDir = await mkdtemp(path.join(tmpdir(), 'yt-sub-'));
+  try {
+    const outputTemplate = path.join(workDir, 'sub.%(ext)s');
+    await execFileAsync(
+      'yt-dlp',
+      [
+        '--skip-download',
+        '--no-warnings',
+        '--write-auto-subs',
+        '--write-subs',
+        '--sub-langs',
+        'ko.*,ko,en.*,en',
+        '--sub-format',
+        'vtt',
+        '--output',
+        outputTemplate,
+        link
+      ],
+      { timeout: 120000 }
+    );
+
+    const files = await readdir(workDir);
+    const vttFile = files.find((name) => name.endsWith('.vtt'));
+    if (!vttFile) {
+      return '';
+    }
+
+    const vtt = await readFile(path.join(workDir, vttFile), 'utf-8');
+    return vttToPlainText(vtt);
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function fetchYouTubeMetadataByYtDlp(link) {
+  const { stdout } = await execFileAsync(
+    'yt-dlp',
+    ['--skip-download', '--no-warnings', '--dump-single-json', link],
+    { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
+  );
+
+  const data = JSON.parse(stdout || '{}');
+  const title = String(data.title || '').trim();
+  const uploader = String(data.uploader || data.channel || '').trim();
+  const description = String(data.description || '').trim();
+  const duration = Number.isFinite(data.duration) ? Number(data.duration) : null;
+
+  return [
+    title ? `제목: ${title}` : '',
+    uploader ? `채널: ${uploader}` : '',
+    duration ? `길이(초): ${duration}` : '',
+    description ? `설명: ${description}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContext = '') {
+  const maxChars = 20000;
+  const clipped = sourceText.length > maxChars ? `${sourceText.slice(0, maxChars)}...` : sourceText;
+
+  return [
+    '너는 팩트체크 분석가야. 반드시 한국어로 답해.',
+    '아래에 제공된 유튜브 기반 자료만 근거로 분석해. 자료 밖 추측은 금지.',
+    '뉴스성 주장 여부를 먼저 판단하고, 없으면 판정은 "판별불가"로 해.',
+    '',
+    '출력 형식:',
+    '1) 링크요약: [3~6줄]',
+    '2) 자막/대본 핵심: [bullet 3~8개]',
+    '3) 판정: [가짜뉴스/진짜뉴스/판별불가]',
+    '4) 신뢰도: [0~100 정수]',
+    '5) 근거: 핵심 근거 3가지',
+    '6) 주의: 불확실/검증필요 지점',
+    '7) 접근상태: [성공/실패] + 실패사유',
+    '',
+    `링크: ${link}`,
+    `자료출처: ${sourceLabel}`,
+    extraContext ? `사용자 추가설명: ${extraContext}` : '',
+    '',
+    '[자료 시작]',
+    clipped,
+    '[자료 끝]'
   ]
     .filter(Boolean)
     .join('\n');
@@ -695,7 +835,50 @@ app.post('/api/check', async (req, res) => {
       console.log('[API] /api/check context: (empty)');
     }
 
-    const prompt = buildPrompt(cleanLink, cleanContext);
+    let prompt = buildPrompt(cleanLink, cleanContext);
+    if (isYouTubeLink(cleanLink)) {
+      let sourceText = '';
+      let sourceLabel = '';
+
+      try {
+        const transcript = await fetchYouTubeTranscriptByYtDlp(cleanLink);
+        if (transcript) {
+          sourceText = transcript;
+          sourceLabel = 'transcript:yt-dlp';
+          console.log(`[API] youtube transcript fetched chars=${transcript.length}`);
+        }
+      } catch (transcriptError) {
+        console.log(
+          `[API] youtube transcript fetch failed: ${
+            transcriptError instanceof Error ? transcriptError.message : String(transcriptError)
+          }`
+        );
+      }
+
+      if (!sourceText) {
+        try {
+          const metadata = await fetchYouTubeMetadataByYtDlp(cleanLink);
+          if (metadata) {
+            sourceText = metadata;
+            sourceLabel = 'metadata:yt-dlp';
+            console.log(`[API] youtube metadata fetched chars=${metadata.length}`);
+          }
+        } catch (metaError) {
+          console.log(
+            `[API] youtube metadata fetch failed: ${
+              metaError instanceof Error ? metaError.message : String(metaError)
+            }`
+          );
+        }
+      }
+
+      if (sourceText) {
+        prompt = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext);
+      } else {
+        console.log('[API] youtube source unavailable. fallback to direct link prompt');
+      }
+    }
+
     const result = await askGemini(prompt);
     return res.json({ ok: true, link, result });
   } catch (error) {
