@@ -45,6 +45,45 @@ function statusMeta(level) {
   return { label: '애매함 / 추가 확인 필요', icon: '!', tone: 'yellow' };
 }
 
+function ResultPanel({ title, payload }) {
+  if (!payload) {
+    return null;
+  }
+
+  if (!payload.ok) {
+    return (
+      <section className="compare-item">
+        <h3>{title}</h3>
+        <div className="error">오류: {payload.error || '결과 없음'}</div>
+      </section>
+    );
+  }
+
+  const text = payload.text || '응답이 비어 있습니다.';
+  const parsed = parseAnalysis(text);
+  const meta = statusMeta(parsed.level);
+
+  return (
+    <section className="compare-item">
+      <h3>{title}</h3>
+      <section className={`status-board ${meta.tone}`}>
+        <div className="status-icon">{meta.icon}</div>
+        <div className="status-content">
+          <strong>{meta.label}</strong>
+          <div className="status-metrics">
+            <span>판정: {parsed.verdict}</span>
+            <span>신뢰도: {parsed.confidence === null ? '미제공' : `${parsed.confidence}%`}</span>
+          </div>
+        </div>
+      </section>
+      <h4 className="raw-title">답변 원문</h4>
+      <div className="markdown-result">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState(null);
   const [installMessage, setInstallMessage] = useState('');
@@ -53,6 +92,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
+  const [dualResults, setDualResults] = useState(null);
   const parsed = result ? parseAnalysis(result) : null;
   const meta = parsed ? statusMeta(parsed.level) : null;
   const hasLink = link.trim().length > 0;
@@ -108,6 +148,7 @@ function App() {
     setLoading(true);
     setError('');
     setResult('');
+    setDualResults(null);
 
     try {
       const response = await fetch(apiUrl('/api/check'), {
@@ -124,7 +165,17 @@ function App() {
         throw new Error(data.error || '판별 요청에 실패했습니다.');
       }
 
-      setResult(data.result || '응답이 비어 있습니다.');
+      if (data.results && typeof data.results === 'object') {
+        setDualResults(data.results);
+        setResult(
+          data.result ||
+            data.results?.web?.text ||
+            data.results?.api?.text ||
+            '응답이 비어 있습니다.'
+        );
+      } else {
+        setResult(data.result || '응답이 비어 있습니다.');
+      }
     } catch (err) {
       if (err instanceof Error && /failed to fetch/i.test(err.message)) {
         setError(
@@ -177,7 +228,7 @@ function App() {
           )}
 
           <button type="submit" disabled={loading}>
-            {loading ? 'Gemini 웹에서 판별 중...' : '가짜뉴스 판별하기'}
+            {loading ? 'Gemini API + Headless 병행 판별 중...' : '가짜뉴스 판별하기'}
           </button>
         </form>
 
@@ -193,22 +244,31 @@ function App() {
         {result && (
           <article className="result">
             <h2>판별 결과</h2>
-            {parsed && meta && (
-              <section className={`status-board ${meta.tone}`}>
-                <div className="status-icon">{meta.icon}</div>
-                <div className="status-content">
-                  <strong>{meta.label}</strong>
-                  <div className="status-metrics">
-                    <span>판정: {parsed.verdict}</span>
-                    <span>신뢰도: {parsed.confidence === null ? '미제공' : `${parsed.confidence}%`}</span>
-                  </div>
+            {dualResults ? (
+              <div className="compare-grid">
+                <ResultPanel title="Gemini API 결과" payload={dualResults.api} />
+                <ResultPanel title="Playwright Headless 결과" payload={dualResults.web} />
+              </div>
+            ) : (
+              <>
+                {parsed && meta && (
+                  <section className={`status-board ${meta.tone}`}>
+                    <div className="status-icon">{meta.icon}</div>
+                    <div className="status-content">
+                      <strong>{meta.label}</strong>
+                      <div className="status-metrics">
+                        <span>판정: {parsed.verdict}</span>
+                        <span>신뢰도: {parsed.confidence === null ? '미제공' : `${parsed.confidence}%`}</span>
+                      </div>
+                    </div>
+                  </section>
+                )}
+                <h3 className="raw-title">답변 원문</h3>
+                <div className="markdown-result">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{result}</ReactMarkdown>
                 </div>
-              </section>
+              </>
             )}
-            <h3 className="raw-title">답변 원문</h3>
-            <div className="markdown-result">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{result}</ReactMarkdown>
-            </div>
           </article>
         )}
       </section>

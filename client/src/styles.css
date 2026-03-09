@@ -148,6 +148,22 @@ button:disabled {
   padding-top: 12px;
 }
 
+.compare-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.compare-item {
+  border: 1px solid #ccefd5;
+  background: #f8fffb;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.compare-item h3 {
+  margin: 0 0 10px;
+}
+
 .status-board {
   display: flex;
   gap: 12px;

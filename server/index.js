@@ -24,7 +24,7 @@ const GEMINI_REQUIRE_LOGIN = String(process.env.GEMINI_REQUIRE_LOGIN || 'true') 
 const GEMINI_CDP_URL = (process.env.GEMINI_CDP_URL || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const GEMINI_API_MODEL = (process.env.GEMINI_API_MODEL || 'gemini-2.5-flash-lite').trim();
-const GEMINI_HEADLESS = GEMINI_RUN_MODE === 'novnc' ? false : GEMINI_RUN_MODE === 'headless';
+const GEMINI_HEADLESS = GEMINI_RUN_MODE === 'novnc' ? false : true;
 const LOGIN_REQUIRED_FOR_MODE = GEMINI_REQUIRE_LOGIN;
 const GEMINI_STEALTH =
   String(process.env.GEMINI_STEALTH || process.env.YOUTUBE_SUMMARY_STEALTH || 'true') === 'true';
@@ -41,6 +41,7 @@ class GeminiLoginRequiredError extends Error {
 
 let browserContextPromise;
 let browserPromise;
+let headlessCompareContextPromise;
 
 function cleanupProfileSingletonLocks(profileDir) {
   const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
@@ -53,10 +54,6 @@ function cleanupProfileSingletonLocks(profileDir) {
 }
 
 async function getContext() {
-  if (GEMINI_RUN_MODE === 'geminiapi') {
-    throw new Error('GEMINI_RUN_MODE=geminiapi 모드에서는 브라우저 컨텍스트를 사용하지 않습니다.');
-  }
-
   if (!browserContextPromise) {
     if (GEMINI_RUN_MODE === 'cdp') {
       if (!GEMINI_CDP_URL) {
@@ -101,6 +98,23 @@ async function getContext() {
     }
   }
   return browserContextPromise;
+}
+
+async function getHeadlessCompareContext() {
+  if (!headlessCompareContextPromise) {
+    cleanupProfileSingletonLocks(GEMINI_PROFILE_DIR);
+    headlessCompareContextPromise = chromium
+      .launchPersistentContext(GEMINI_PROFILE_DIR, {
+        headless: true,
+        viewport: { width: 1366, height: 900 },
+        args: ['--start-maximized']
+      })
+      .catch((error) => {
+        headlessCompareContextPromise = undefined;
+        throw error;
+      });
+  }
+  return headlessCompareContextPromise;
 }
 
 function buildPrompt(link, extraContext = '') {
@@ -240,7 +254,7 @@ async function fetchYouTubeMetadataByYtDlp(link) {
     .trim();
 }
 
-function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContext = '') {
+function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContext = '', includeLink = true) {
   const maxChars = 20000;
   const clipped = sourceText.length > maxChars ? `${sourceText.slice(0, maxChars)}...` : sourceText;
 
@@ -258,13 +272,34 @@ function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContex
     '6) 주의: 불확실/검증필요 지점',
     '7) 접근상태: [성공/실패] + 실패사유',
     '',
-    `링크: ${link}`,
+    includeLink ? `링크: ${link}` : '',
     `자료출처: ${sourceLabel}`,
     extraContext ? `사용자 추가설명: ${extraContext}` : '',
     '',
     '[자료 시작]',
     clipped,
     '[자료 끝]'
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildYouTubeNoSourcePrompt(extraContext = '') {
+  return [
+    '너는 팩트체크 분석가야. 반드시 한국어로 답해.',
+    '유튜브 링크 원문은 전달하지 않는다.',
+    '현재 자막/대본/메타데이터를 확보하지 못했으므로 판정은 반드시 "판별불가"로 해.',
+    '',
+    '출력 형식:',
+    '1) 링크요약: 확보 실패',
+    '2) 자막/대본 핵심: 확보 실패',
+    '3) 판정: 판별불가',
+    '4) 신뢰도: 0',
+    '5) 근거: 자료 미확보',
+    '6) 주의: 자막 또는 대본 확보 후 재분석 필요',
+    '7) 접근상태: 실패 + 자막/메타데이터 확보 실패',
+    '',
+    extraContext ? `사용자 추가설명: ${extraContext}` : ''
   ]
     .filter(Boolean)
     .join('\n');
@@ -725,6 +760,23 @@ async function askGeminiByWeb(prompt) {
   }
 }
 
+async function askGeminiByWebHeadless(prompt) {
+  const context = await getHeadlessCompareContext();
+  const page = await context.newPage();
+  try {
+    console.log('[GeminiWebHeadless] prompt to send:\n', prompt);
+    await page.bringToFront().catch(() => {});
+    await ensureGeminiReady(page);
+    const baselineCount = await getResponseNodeCount(page);
+    await fillPromptAndSend(page, prompt, baselineCount);
+    const answer = await waitForResponse(page, GEMINI_TIMEOUT_MS, baselineCount);
+    console.log(`[GeminiWebHeadless] response length: ${answer.length}`);
+    return answer;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 async function askGeminiByApi(prompt) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
@@ -835,7 +887,8 @@ app.post('/api/check', async (req, res) => {
       console.log('[API] /api/check context: (empty)');
     }
 
-    let prompt = buildPrompt(cleanLink, cleanContext);
+    let promptForApi = buildPrompt(cleanLink, cleanContext);
+    let promptForWeb = buildPrompt(cleanLink, cleanContext);
     if (isYouTubeLink(cleanLink)) {
       let sourceText = '';
       let sourceLabel = '';
@@ -873,14 +926,63 @@ app.post('/api/check', async (req, res) => {
       }
 
       if (sourceText) {
-        prompt = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext);
+        promptForApi = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext, true);
+        promptForWeb = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext, false);
       } else {
-        console.log('[API] youtube source unavailable. fallback to direct link prompt');
+        console.log('[API] youtube source unavailable. use no-source prompt for web');
+        promptForWeb = buildYouTubeNoSourcePrompt(cleanContext);
       }
     }
 
-    const result = await askGemini(prompt);
-    return res.json({ ok: true, link, result });
+    if (GEMINI_RUN_MODE === 'geminiapi') {
+      const [apiResult, webResult] = await Promise.allSettled([
+        askGeminiByApi(promptForApi),
+        askGeminiByWebHeadless(promptForWeb)
+      ]);
+
+      const apiPayload =
+        apiResult.status === 'fulfilled'
+          ? { ok: true, text: apiResult.value }
+          : {
+              ok: false,
+              error:
+                apiResult.reason instanceof Error ? apiResult.reason.message : String(apiResult.reason)
+            };
+      const webPayload =
+        webResult.status === 'fulfilled'
+          ? { ok: true, text: webResult.value }
+          : {
+              ok: false,
+              error:
+                webResult.reason instanceof Error ? webResult.reason.message : String(webResult.reason)
+            };
+
+      if (!apiPayload.ok && !webPayload.ok) {
+        throw new Error(`API 실패: ${apiPayload.error} | WEB 실패: ${webPayload.error}`);
+      }
+
+      const primary = webPayload.ok ? webPayload.text : apiPayload.text;
+      return res.json({
+        ok: true,
+        link,
+        result: primary,
+        results: {
+          api: apiPayload,
+          web: webPayload
+        }
+      });
+    }
+
+    const result = await askGemini(promptForWeb);
+    return res.json({
+      ok: true,
+      link,
+      result,
+      results: {
+        api: { ok: false, error: '현재 모드에서 API 비교 비활성화' },
+        web: { ok: true, text: result }
+      }
+    });
   } catch (error) {
     if (error instanceof GeminiLoginRequiredError) {
       return res.status(401).json({
