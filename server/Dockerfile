@@ -10,8 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   x11vnc \
   fluxbox \
   novnc \
-  yt-dlp \
+  python3-pip \
   python3-websockify \
+  && python3 -m pip install --no-cache-dir --break-system-packages --upgrade yt-dlp \
   && rm -rf /var/lib/apt/lists/*
 
 COPY server/index.js ./index.js

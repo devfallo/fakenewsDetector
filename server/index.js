@@ -204,6 +204,10 @@ async function fetchYouTubeTranscriptByYtDlp(link) {
       [
         '--skip-download',
         '--no-warnings',
+        '--ignore-no-formats-error',
+        '--extractor-args',
+        'youtube:player_client=web,android,ios',
+        '--no-playlist',
         '--write-auto-subs',
         '--write-subs',
         '--sub-langs',
@@ -233,7 +237,16 @@ async function fetchYouTubeTranscriptByYtDlp(link) {
 async function fetchYouTubeMetadataByYtDlp(link) {
   const { stdout } = await execFileAsync(
     'yt-dlp',
-    ['--skip-download', '--no-warnings', '--dump-single-json', link],
+    [
+      '--skip-download',
+      '--no-warnings',
+      '--ignore-no-formats-error',
+      '--extractor-args',
+      'youtube:player_client=web,android,ios',
+      '--no-playlist',
+      '--dump-single-json',
+      link
+    ],
     { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
   );
 
