@@ -1,7 +1,23 @@
 :root {
+  --background: #f6f7fb;
+  --foreground: #0f172a;
+  --muted-foreground: #475569;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --input: #ffffff;
+  --primary: #0f172a;
+  --primary-foreground: #ffffff;
+  --secondary: #f8fafc;
+  --secondary-foreground: #0f172a;
+  --ring: #94a3b8;
+  --success: #16a34a;
+  --warning: #ca8a04;
+  --danger: #dc2626;
+  --radius: 12px;
+
   font-family: 'Pretendard', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #0a1f18;
-  background: radial-gradient(circle at 10% 20%, #d9fce7, #c7f2ff 40%, #f8ffea 85%);
+  color: var(--foreground);
+  background: var(--background);
 }
 
 * {
@@ -20,44 +36,41 @@ body {
   padding: 24px;
 }
 
+.page.large-text {
+  font-size: 1.14rem;
+}
+
 .card {
-  width: min(760px, 100%);
-  background: rgba(255, 255, 255, 0.84);
-  backdrop-filter: blur(4px);
-  border: 1px solid #b7eec4;
-  border-radius: 18px;
-  padding: 24px;
-  box-shadow: 0 14px 45px rgba(25, 56, 39, 0.17);
+  width: min(960px, 100%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  padding: 20px;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.08);
+}
+
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 h1 {
   margin: 0;
-  font-size: 1.7rem;
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  line-height: 1.2;
 }
 
 .sub {
-  margin: 8px 0 18px;
-  color: #42574d;
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+  line-height: 1.5;
 }
 
 .install-box {
-  margin: 0 0 16px;
-}
-
-.install-button {
-  border: 1px solid #0d8a50;
-  border-radius: 10px;
-  padding: 10px 14px;
-  background: #ecfff2;
-  color: #0d8a50;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.install-message {
-  margin: 8px 0 0;
-  font-size: 0.9rem;
-  color: #3f5d50;
+  margin: 14px 0 16px;
 }
 
 form {
@@ -66,19 +79,7 @@ form {
 }
 
 .link-label {
-  font-size: 1.05rem;
-}
-
-.link-input {
-  min-height: 62px;
-  font-size: 1.07rem;
-  border: 2px solid #67b483;
-  background: #f1fff6;
-  box-shadow: 0 0 0 4px rgba(103, 180, 131, 0.13);
-}
-
-.link-input::placeholder {
-  color: #5d7f70;
+  font-size: 1.04em;
 }
 
 label {
@@ -94,10 +95,23 @@ button {
 input,
 textarea {
   width: 100%;
-  border: 1px solid #a8d2b4;
-  border-radius: 10px;
-  padding: 12px;
-  background: #f7fffb;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--input);
+  color: var(--foreground);
+}
+
+.link-input {
+  min-height: 52px;
+  border-width: 2px;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 textarea {
@@ -105,46 +119,97 @@ textarea {
 }
 
 button {
-  border: 0;
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: #0d8a50;
-  color: #fff;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 11px 14px;
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-weight: 700;
   cursor: pointer;
 }
 
 button:disabled {
-  opacity: 0.62;
+  opacity: 0.65;
   cursor: wait;
+}
+
+.secondary-button,
+.install-button {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  border-color: var(--border);
+}
+
+.install-message {
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+  line-height: 1.4;
+}
+
+.detected-links {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.detected-links strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.tag-wrap {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tag-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--foreground);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.9em;
+}
+
+.tag-button.active {
+  background: #dbeafe;
+  border-color: #93c5fd;
 }
 
 .examples {
   margin-top: 16px;
   display: grid;
-  gap: 4px;
-  color: #4c6b5f;
-  font-size: 0.9rem;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 0.92em;
 }
 
 .examples code {
   display: block;
   white-space: nowrap;
   overflow-x: auto;
-  background: #effaf2;
+  background: #f8fafc;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 6px 8px;
 }
 
 .error {
   margin-top: 14px;
-  color: #a21919;
+  color: var(--danger);
   font-weight: 600;
+  line-height: 1.45;
 }
 
 .result {
   margin-top: 16px;
-  border-top: 1px solid #ccefd5;
+  border-top: 1px solid var(--border);
   padding-top: 12px;
 }
 
@@ -154,9 +219,9 @@ button:disabled {
 }
 
 .compare-item {
-  border: 1px solid #ccefd5;
-  background: #f8fffb;
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fcfcfd;
+  border-radius: var(--radius);
   padding: 12px;
 }
 
@@ -168,25 +233,25 @@ button:disabled {
   display: flex;
   gap: 12px;
   align-items: center;
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 12px;
   border: 1px solid;
   margin-bottom: 12px;
 }
 
 .status-board.green {
-  background: #ecfff2;
-  border-color: #58b879;
+  background: #f0fdf4;
+  border-color: #86efac;
 }
 
 .status-board.yellow {
-  background: #fff8e6;
-  border-color: #d8b14c;
+  background: #fefce8;
+  border-color: #fde047;
 }
 
 .status-board.red {
-  background: #ffeded;
-  border-color: #d86666;
+  background: #fef2f2;
+  border-color: #fca5a5;
 }
 
 .status-icon {
@@ -196,7 +261,7 @@ button:disabled {
   display: grid;
   place-items: center;
   font-weight: 800;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .status-content {
@@ -208,21 +273,21 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  font-size: 0.93rem;
-  color: #3b4d44;
+  font-size: 0.94em;
+  color: #334155;
 }
 
 .raw-title {
   margin: 0 0 8px;
-  font-size: 1.05rem;
+  font-size: 1.02em;
 }
 
 .markdown-result {
-  background: #f4fff7;
-  border: 1px solid #ccefd5;
+  background: #ffffff;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
-  line-height: 1.45;
+  line-height: 1.6;
   max-height: 55vh;
   overflow: auto;
   word-break: break-word;
@@ -241,4 +306,27 @@ button:disabled {
 
 .markdown-result > :last-child {
   margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 14px;
+  }
+
+  .card {
+    padding: 14px;
+    width: 100%;
+  }
+
+  .title-row {
+    flex-direction: column;
+  }
+
+  .secondary-button {
+    width: 100%;
+  }
+
+  .tag-button {
+    width: 100%;
+  }
 }
