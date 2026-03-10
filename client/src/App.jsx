@@ -53,6 +53,50 @@ function statusMeta(level) {
   return { label: '애매함 / 추가 확인 필요', icon: '!', tone: 'yellow' };
 }
 
+function IconFrame({ children }) {
+  return <span className="icon-frame" aria-hidden="true">{children}</span>;
+}
+
+function PlusSquareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="4" />
+      <path d="M12 8v8" />
+      <path d="M8 12h8" />
+    </svg>
+  );
+}
+
+function TypeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16" />
+      <path d="M9 7v10" />
+      <path d="M15 7v10" />
+      <path d="M7 17h10" />
+    </svg>
+  );
+}
+
+function SearchSparkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="m15 15 5 5" />
+      <path d="M18 4v4" />
+      <path d="M16 6h4" />
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spin">
+      <path d="M21 12a9 9 0 1 1-6.22-8.56" />
+    </svg>
+  );
+}
+
 function ResultPanel({ title, payload }) {
   if (!payload) {
     return null;
@@ -250,17 +294,29 @@ function App() {
           </div>
           <button
             type="button"
-            className="secondary-button"
+            className="secondary-button icon-button"
             onClick={() => setLargeText((prev) => !prev)}
             aria-pressed={largeText}
+            aria-label={largeText ? '기본 글자 크기로 전환' : '큰 글자 크기로 전환'}
+            title={largeText ? '기본 글자' : '큰 글자'}
           >
-            {largeText ? '기본 글자' : '큰 글자'}
+            <IconFrame>
+              <TypeIcon />
+            </IconFrame>
           </button>
         </div>
 
         <div className="install-box">
-          <button type="button" className="install-button" onClick={onAddToHomeScreen}>
-            홈 화면에 추가
+          <button
+            type="button"
+            className="install-button icon-button"
+            onClick={onAddToHomeScreen}
+            aria-label="홈 화면에 추가"
+            title="홈 화면에 추가"
+          >
+            <IconFrame>
+              <PlusSquareIcon />
+            </IconFrame>
           </button>
           {installMessage && <p className="install-message">{installMessage}</p>}
         </div>
@@ -309,8 +365,16 @@ function App() {
             </>
           )}
 
-          <button type="submit" disabled={loading}>
-            {loading ? 'Gemini API + Headless 병행 판별 중...' : '가짜뉴스 판별하기'}
+          <button
+            type="submit"
+            className="submit-button icon-button"
+            disabled={loading}
+            aria-label={loading ? '가짜뉴스 분석 진행 중' : '가짜뉴스 분석 시작'}
+            title={loading ? '분석 중' : '분석 시작'}
+          >
+            <IconFrame>
+              {loading ? <SpinnerIcon /> : <SearchSparkIcon />}
+            </IconFrame>
           </button>
         </form>
 
