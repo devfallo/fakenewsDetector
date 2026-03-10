@@ -180,6 +180,39 @@ function isYouTubeLink(link) {
   return Boolean(extractYouTubeVideoId(link));
 }
 
+function detectSocialPlatform(link) {
+  try {
+    const url = new URL(link);
+    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+
+    if (host === 'youtu.be' || host === 'youtube.com' || host === 'm.youtube.com') {
+      return 'youtube';
+    }
+
+    if (host === 'instagram.com' || host === 'm.instagram.com') {
+      return 'instagram';
+    }
+
+    if (host === 'tiktok.com' || host.endsWith('.tiktok.com') || host === 'vm.tiktok.com') {
+      return 'tiktok';
+    }
+  } catch (_err) {
+    return null;
+  }
+
+  return null;
+}
+
+function getYtDlpArgsForPlatform(platform, link) {
+  const common = ['--skip-download', '--no-warnings', '--ignore-no-formats-error', '--no-playlist'];
+
+  if (platform === 'youtube') {
+    return [...common, '--extractor-args', 'youtube:player_client=web,android,ios', link];
+  }
+
+  return [...common, link];
+}
+
 function vttToPlainText(vtt) {
   return vtt
     .split('\n')
@@ -195,19 +228,15 @@ function vttToPlainText(vtt) {
     .trim();
 }
 
-async function fetchYouTubeTranscriptByYtDlp(link) {
+async function fetchTranscriptByYtDlp(link, platform = 'youtube') {
   const workDir = await mkdtemp(path.join(tmpdir(), 'yt-sub-'));
   try {
     const outputTemplate = path.join(workDir, 'sub.%(ext)s');
+    const baseArgs = getYtDlpArgsForPlatform(platform, link);
     await execFileAsync(
       'yt-dlp',
       [
-        '--skip-download',
-        '--no-warnings',
-        '--ignore-no-formats-error',
-        '--extractor-args',
-        'youtube:player_client=web,android,ios',
-        '--no-playlist',
+        ...baseArgs.slice(0, -1),
         '--write-auto-subs',
         '--write-subs',
         '--sub-langs',
@@ -216,7 +245,7 @@ async function fetchYouTubeTranscriptByYtDlp(link) {
         'vtt',
         '--output',
         outputTemplate,
-        link
+        baseArgs.at(-1)
       ],
       { timeout: 120000 }
     );
@@ -234,18 +263,14 @@ async function fetchYouTubeTranscriptByYtDlp(link) {
   }
 }
 
-async function fetchYouTubeMetadataByYtDlp(link) {
+async function fetchMetadataByYtDlp(link, platform = 'youtube') {
+  const args = getYtDlpArgsForPlatform(platform, link);
   const { stdout } = await execFileAsync(
     'yt-dlp',
     [
-      '--skip-download',
-      '--no-warnings',
-      '--ignore-no-formats-error',
-      '--extractor-args',
-      'youtube:player_client=web,android,ios',
-      '--no-playlist',
+      ...args.slice(0, -1),
       '--dump-single-json',
-      link
+      args.at(-1)
     ],
     { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
   );
@@ -255,25 +280,50 @@ async function fetchYouTubeMetadataByYtDlp(link) {
   const uploader = String(data.uploader || data.channel || '').trim();
   const description = String(data.description || '').trim();
   const duration = Number.isFinite(data.duration) ? Number(data.duration) : null;
+  const caption = String(data.caption || data.alt_title || '').trim();
+  const webpageUrl = String(data.webpage_url || data.original_url || '').trim();
+  const likeCount = Number.isFinite(data.like_count) ? Number(data.like_count) : null;
+  const viewCount = Number.isFinite(data.view_count) ? Number(data.view_count) : null;
+  const commentCount = Number.isFinite(data.comment_count) ? Number(data.comment_count) : null;
+  const uploadDate = String(data.upload_date || '').trim();
+  const tags = Array.isArray(data.tags) ? data.tags.filter(Boolean).slice(0, 12) : [];
+  const subtitles = Array.isArray(data.automatic_captions) || Array.isArray(data.subtitles)
+    ? ''
+    : '';
 
   return [
     title ? `제목: ${title}` : '',
     uploader ? `채널: ${uploader}` : '',
     duration ? `길이(초): ${duration}` : '',
-    description ? `설명: ${description}` : ''
+    caption ? `캡션: ${caption}` : '',
+    description ? `설명: ${description}` : '',
+    uploadDate ? `업로드일: ${uploadDate}` : '',
+    viewCount !== null ? `조회수: ${viewCount}` : '',
+    likeCount !== null ? `좋아요수: ${likeCount}` : '',
+    commentCount !== null ? `댓글수: ${commentCount}` : '',
+    tags.length > 0 ? `태그: ${tags.join(', ')}` : '',
+    webpageUrl ? `원문주소: ${webpageUrl}` : '',
+    subtitles
   ]
     .filter(Boolean)
     .join('\n')
     .trim();
 }
 
-function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContext = '', includeLink = true) {
+function buildPlatformPromptWithSource(
+  link,
+  sourceText,
+  sourceLabel,
+  extraContext = '',
+  includeLink = true,
+  platformLabel = '콘텐츠'
+) {
   const maxChars = 20000;
   const clipped = sourceText.length > maxChars ? `${sourceText.slice(0, maxChars)}...` : sourceText;
 
   return [
     '너는 팩트체크 분석가야. 반드시 한국어로 답해.',
-    '아래에 제공된 유튜브 기반 자료만 근거로 분석해. 자료 밖 추측은 금지.',
+    `아래에 제공된 ${platformLabel} 기반 자료만 근거로 분석해. 자료 밖 추측은 금지.`,
     '뉴스성 주장 여부를 먼저 판단하고, 없으면 판정은 "판별불가"로 해.',
     '',
     '출력 형식:',
@@ -297,10 +347,10 @@ function buildYouTubePromptWithSource(link, sourceText, sourceLabel, extraContex
     .join('\n');
 }
 
-function buildYouTubeNoSourcePrompt(extraContext = '') {
+function buildNoSourcePrompt(extraContext = '', platformLabel = '콘텐츠') {
   return [
     '너는 팩트체크 분석가야. 반드시 한국어로 답해.',
-    '유튜브 링크 원문은 전달하지 않는다.',
+    `${platformLabel} 링크 원문은 전달하지 않는다.`,
     '현재 자막/대본/메타데이터를 확보하지 못했으므로 판정은 반드시 "판별불가"로 해.',
     '',
     '출력 형식:',
@@ -912,20 +962,27 @@ app.post('/api/check', async (req, res) => {
 
     let promptForApi = buildPrompt(cleanLink, cleanContext);
     let promptForWeb = buildPrompt(cleanLink, cleanContext);
-    if (isYouTubeLink(cleanLink)) {
+    const socialPlatform = detectSocialPlatform(cleanLink);
+    if (socialPlatform) {
       let sourceText = '';
       let sourceLabel = '';
+      const platformLabel =
+        socialPlatform === 'youtube'
+          ? '유튜브'
+          : socialPlatform === 'instagram'
+            ? '인스타그램 릴스'
+            : '틱톡';
 
       try {
-        const transcript = await fetchYouTubeTranscriptByYtDlp(cleanLink);
+        const transcript = await fetchTranscriptByYtDlp(cleanLink, socialPlatform);
         if (transcript) {
           sourceText = transcript;
           sourceLabel = 'transcript:yt-dlp';
-          console.log(`[API] youtube transcript fetched chars=${transcript.length}`);
+          console.log(`[API] ${socialPlatform} transcript fetched chars=${transcript.length}`);
         }
       } catch (transcriptError) {
         console.log(
-          `[API] youtube transcript fetch failed: ${
+          `[API] ${socialPlatform} transcript fetch failed: ${
             transcriptError instanceof Error ? transcriptError.message : String(transcriptError)
           }`
         );
@@ -933,15 +990,15 @@ app.post('/api/check', async (req, res) => {
 
       if (!sourceText) {
         try {
-          const metadata = await fetchYouTubeMetadataByYtDlp(cleanLink);
+          const metadata = await fetchMetadataByYtDlp(cleanLink, socialPlatform);
           if (metadata) {
             sourceText = metadata;
             sourceLabel = 'metadata:yt-dlp';
-            console.log(`[API] youtube metadata fetched chars=${metadata.length}`);
+            console.log(`[API] ${socialPlatform} metadata fetched chars=${metadata.length}`);
           }
         } catch (metaError) {
           console.log(
-            `[API] youtube metadata fetch failed: ${
+            `[API] ${socialPlatform} metadata fetch failed: ${
               metaError instanceof Error ? metaError.message : String(metaError)
             }`
           );
@@ -949,11 +1006,25 @@ app.post('/api/check', async (req, res) => {
       }
 
       if (sourceText) {
-        promptForApi = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext, true);
-        promptForWeb = buildYouTubePromptWithSource(cleanLink, sourceText, sourceLabel, cleanContext, false);
+        promptForApi = buildPlatformPromptWithSource(
+          cleanLink,
+          sourceText,
+          sourceLabel,
+          cleanContext,
+          true,
+          platformLabel
+        );
+        promptForWeb = buildPlatformPromptWithSource(
+          cleanLink,
+          sourceText,
+          sourceLabel,
+          cleanContext,
+          false,
+          platformLabel
+        );
       } else {
-        console.log('[API] youtube source unavailable. use no-source prompt for web');
-        promptForWeb = buildYouTubeNoSourcePrompt(cleanContext);
+        console.log(`[API] ${socialPlatform} source unavailable. use no-source prompt for web`);
+        promptForWeb = buildNoSourcePrompt(cleanContext, platformLabel);
       }
     }
 
